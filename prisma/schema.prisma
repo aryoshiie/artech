@@ -1,0 +1,273 @@
+// Artech Orchestrator — Prisma schema
+// Provider: PostgreSQL (Supabase, Japan region)
+// Mendukung: multi-agent galaxy visualization, routing 2 lapis, voice per-agent,
+// session management dengan idle timeout 30 menit, execution log, file upload via Supabase Storage.
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["multiSchema"]
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+  schemas   = ["artech"]
+}
+
+// =============== ENUMS ===============
+
+enum MessageRole {
+  user
+  agent
+  system
+
+  @@schema("artech")
+}
+
+enum SessionMode {
+  default       // → orchestrator (Lapis 2)
+  bypass        // → direct agent (Lapis 1)
+
+  @@schema("artech")
+}
+
+enum SessionStatus {
+  active
+  ended_agent   // diakhiri oleh agent (sinyal end_session dari n8n)
+  ended_user    // diakhiri oleh user (intent disconnect)
+  ended_idle    // diakhiri karena idle timeout 30 menit
+  ended_error   // diakhiri karena error
+
+  @@schema("artech")
+}
+
+enum ExecutionStatus {
+  pending
+  running
+  success
+  error
+  timeout
+
+  @@schema("artech")
+}
+
+// =============== MODELS ===============
+
+// Setiap baris = satu "bintang" (core orchestrator atau planet agent).
+// isCore membedakan Inti Galaksi dari agent biasa.
+/// Schema: artech (terpisah dari data Artha Enterprise lama di schema public)
+model Agent {
+  id              String    @id
+  name            String
+  role            String
+  desc            String    @default("")
+  color           String
+  glow            String    @default("")
+  size            Float     @default(4)
+  orbit           Float     @default(30)
+  duration        Float     @default(20)
+  ring            Boolean   @default(false)
+  isCore          Boolean   @default(false)
+  custom          Boolean   @default(false)
+
+  // Routing Lapis 1 — keyword untuk exact match di 2 kata pertama
+  routingKeywords String?   // CSV, mis. "mercury,merkurius,merk"
+
+  // Urutan prioritas saat orchestrator memilih (default mode)
+  orchestratorOrder Int     @default(0)
+
+  // Voice config (browser native Web Speech API)
+  voicePitch       Float    @default(1)
+  voiceRate        Float    @default(1)
+  voiceGender      String?  // "male" | "female" | "neutral" — filter voice selection
+  voiceName        String?  // voice URI dari speechSynthesis.getVoices() — assign per agent
+
+  // n8n integration
+  webhookUrl       String?  // URL webhook agent ini di n8n (kalau bypass mode)
+  workflowId       String?  // n8n workflow ID (untuk Execute Workflow dari orchestrator)
+
+  // Gamifikasi
+  xp               Int      @default(0)
+  level            Int      @default(1)
+
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  messages         Message[]
+  tools            Tool[]
+  sessions         Session[]        @relation("SessionActiveAgent")
+  executions       AgentExecution[]
+
+  @@index([isCore])
+  @@index([orchestratorOrder])
+  @@schema("artech")
+}
+
+// Planet pengikut yang mengorbit satu bintang (agent) — kaki tangan/tools agent.
+// Eksekusi tetap lewat webhook TUNGGAL milik Agent; Tool di sini murni identitas +
+// tampilan visual (posisi orbit lokal).
+model Tool {
+  id        String   @id @default(cuid())
+  agentId   String
+  agent     Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  name      String
+  desc      String   @default("")
+  icon      String?
+  color     String
+  size      Float    @default(1)
+  orbit     Float    @default(6)
+  duration  Float    @default(6)
+  callCount Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@index([agentId])
+  @@schema("artech")
+}
+
+model Message {
+  id        String      @id @default(cuid())
+  agentId   String
+  agent     Agent       @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  sessionId String?
+  session   Session?    @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  role      MessageRole
+  text      String?
+  files     Json?       // array of { name, size, ext, kind, storagePath, url }
+  createdAt DateTime    @default(now())
+
+  @@index([agentId, createdAt])
+  @@index([sessionId])
+  @@schema("artech")
+}
+
+// Setiap percakapan user dengan sistem = 1 session.
+// Mendukung routing 2 lapis: mode default (→ orchestrator) atau bypass (→ agent langsung).
+// Session bisa berpindah agent (auto-switch kalau user sebut agent lain).
+model Session {
+  id              String        @id @default(cuid())
+  mode            SessionMode   @default(default)
+  status          SessionStatus @default(active)
+  activeAgentId   String?
+  activeAgent     Agent?        @relation("SessionActiveAgent", fields: [activeAgentId], references: [id], onDelete: SetNull)
+
+  // Idle timeout 30 menit — kalau user tidak respon dalam 30 menit, sesi otomatis berakhir
+  lastActivityAt  DateTime      @default(now())
+  startedAt       DateTime      @default(now())
+  endedAt         DateTime?
+
+  // Metadata
+  userAgent       String?
+  ipAddress       String?
+
+  messages        Message[]
+  executions      AgentExecution[]
+
+  @@index([status])
+  @@index([activeAgentId])
+  @@schema("artech")
+}
+
+// Log eksekusi per agent — penting untuk debug routing 2 lapis & audit.
+model AgentExecution {
+  id          String           @id @default(cuid())
+  agentId     String
+  agent       Agent            @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  sessionId   String?
+  session     Session?         @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  workflowId  String?
+
+  status      ExecutionStatus  @default(pending)
+  input       Json?            // { message, files, mode, ... }
+  output      Json?            // { reply, endSession, ... }
+  error       String?
+
+  startedAt   DateTime         @default(now())
+  finishedAt  DateTime?
+  durationMs  Int?
+
+  @@index([agentId, startedAt])
+  @@index([sessionId])
+  @@index([status])
+  @@schema("artech")
+}
+
+// Baris tunggal (id selalu "singleton") untuk pengaturan global.
+model Settings {
+  id                    String   @id @default("singleton")
+  webhookUrl            String?  // orchestrator webhook fallback
+  orchestratorAgentId   String?  // agent id yang jadi orchestrator (default: "orchestrator")
+  autonomousMode        Boolean  @default(false)
+  autonomousIntervalMin Int      @default(10)
+  voiceEnabled          Boolean  @default(true)
+  n8nBaseUrl            String?  // mis. "https://artha.loophole.site"
+  n8nApiKey             String?
+  sessionIdleTimeoutMin Int      @default(30)  // 30 menit idle timeout
+  ownerNotifyWebhook    String?  // webhook n8n untuk kirim notifikasi akses orang lain
+  updatedAt             DateTime @updatedAt
+
+  @@schema("artech")
+}
+
+// User untuk login (private use — biasanya cuma 1 user: owner)
+model User {
+  id           String   @id @default(cuid())
+  username     String   @unique
+  passwordHash String?  // bcrypt hash, null kalau hanya pakai passkey
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  passkeys     Passkey[]
+  sessions     AuthSession[]
+  accessLogs   AccessLog[]
+
+  @@schema("artech")
+}
+
+// Passkey (WebAuthn credential) untuk login tanpa password
+model Passkey {
+  id              String   @id @default(cuid())  // credential ID (base64)
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  publicKey       String   // base64 CBOR encoded
+  counter         Int      @default(0)
+  deviceType      String?  // "singleDevice" | "multiDevice"
+  transports      String?  // JSON array: ["usb", "ble", "nfc", "internal"]
+  name            String?  // label user-friendly (mis. "MacBook Touch ID")
+  createdAt       DateTime @default(now())
+  lastUsedAt      DateTime?
+
+  @@index([userId])
+  @@schema("artech")
+}
+
+// Session token untuk authenticated user
+model AuthSession {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token       String   @unique  // random session token (cookie)
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+  ipAddress   String?
+  userAgent   String?
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@schema("artech")
+}
+
+// Log akses untuk security audit + notifikasi owner kalau ada akses orang lain
+model AccessLog {
+  id          String   @id @default(cuid())
+  userId      String?
+  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  event       String   // "login_success" | "login_failed" | "access_denied" | "logout" | "passkey_register" | "passkey_login"
+  ipAddress   String?
+  userAgent   String?
+  metadata    Json?    // detail tambahan (mis. { reason: "invalid password" })
+  createdAt   DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([event, createdAt])
+  @@schema("artech")
+}
