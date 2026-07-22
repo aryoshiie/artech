@@ -117,6 +117,11 @@ interface AppSettings {
   autonomousMode: boolean;
   autonomousIntervalMin: number;
   sessionIdleTimeoutMin: number;
+  // Wake word settings
+  wakeWordEnabled: boolean;
+  wakeWordGreetings: string;   // CSV: "selamat pagi,halo,hey,..."
+  wakeWordCustom: string;      // CSV: user-defined custom wake words
+  wakeWordAutoSend: boolean;   // true: auto-convert speech to text & send to agent (no drawer open)
 }
 
 interface SessionInfo {
@@ -558,9 +563,8 @@ function ArcReactorPlanet({ seed, color, glow, name, speaking }: { seed: string;
       <canvas ref={canvasRef} className="arc-reactor-canvas" />
       {/* Cincin tipis statis untuk border hologram */}
       <span className="arc-reactor-ring" style={{ borderColor: `${color}55` }} />
-      {/* Nama agent dinamis di pusat */}
-      <div ref={nameRef} className="arc-reactor-name font-display" style={{ color: glow, textShadow: `0 0 4px #05060d, 0 0 8px #05060d, 0 0 6px ${color}, 0 0 14px ${color}99` }}>
-        <span className="arc-reactor-name-backdrop" style={{ background: `radial-gradient(circle, #05060dcc 30%, transparent 70%)` }} />
+      {/* Nama agent dinamis di pusat (tanpa shadow/glow) */}
+      <div ref={nameRef} className="arc-reactor-name font-display" style={{ color: "#ffffff" }}>
         {nameLines.map((ln, i) => (
           <span key={i} className="arc-reactor-name-line">{ln}</span>
         ))}
@@ -742,38 +746,35 @@ interface RosterProps {
   selectedId: string | null;
   onSelect: (id: string) => void;
   onEdit: (id: string) => void;
+  onDelete: (id: string) => void;
   connected: boolean;
   collapsed: boolean;
   onToggleCollapse: () => void;
   onAddAgent: () => void;
 }
 
-function Roster({ allBodies, selectedId, onSelect, onEdit, connected, collapsed, onToggleCollapse, onAddAgent }: RosterProps) {
-  if (collapsed) {
-    return (
-      <div className="roster roster-collapsed">
-        <button className="icon-btn" onClick={onToggleCollapse} title="Buka daftar agent" aria-label="Buka daftar agent">
-          <ChevronLeft size={16} />
-        </button>
-        {allBodies.map((body) => (
-          <button
-            key={body.id}
-            className="roster-dot-btn"
-            data-active={selectedId === body.id}
-            onClick={() => onSelect(body.id)}
-            title={`${body.name} · ${body.role}`}
-            style={{ background: body.color, boxShadow: selectedId === body.id ? `0 0 0.8vmin ${body.color}` : "none" }}
-          />
-        ))}
-      </div>
-    );
-  }
+function Roster({ allBodies, selectedId, onSelect, onEdit, onDelete, connected, collapsed, onToggleCollapse, onAddAgent }: RosterProps) {
   return (
-    <div className="roster">
+    <>
+      {/* Floating hamburger button — selalu visible saat roster collapsed */}
+      {collapsed && (
+        <button
+          className="icon-btn hamburger-btn hamburger-floating"
+          onClick={onToggleCollapse}
+          title="Buka daftar agent"
+          aria-label="Buka daftar agent"
+        >
+          <Menu size={18} />
+        </button>
+      )}
+      {/* Roster panel — overlay, slide keluar saat collapsed */}
+      <div className={`roster${collapsed ? " roster-collapsed" : ""}`}>
+      {!collapsed && (
+        <>
       <div className="roster-header">
         <span className="font-display" style={{ fontSize: 12, color: "#8683a1", letterSpacing: ".08em" }}>DAFTAR AGENT</span>
-        <button className="icon-btn" onClick={onToggleCollapse} title="Sembunyikan daftar" aria-label="Sembunyikan daftar">
-          <ChevronLeft size={14} />
+        <button className="icon-btn hamburger-btn" onClick={onToggleCollapse} title="Sembunyikan daftar" aria-label="Sembunyikan daftar">
+          <Menu size={16} />
         </button>
       </div>
       <button className="pill font-mono roster-add-btn" onClick={onAddAgent} title="Tambah agent baru">
@@ -808,6 +809,20 @@ function Roster({ allBodies, selectedId, onSelect, onEdit, connected, collapsed,
               >
                 <Pencil size={12} />
               </button>
+              {!isSun && (
+                <button
+                  className="roster-edit-btn roster-delete-btn"
+                  onClick={() => {
+                    if (confirm(`Hapus agent "${body.name}"? Riwayat percakapan juga akan dihapus.`)) {
+                      onDelete(body.id);
+                    }
+                  }}
+                  title={`Hapus ${body.name}`}
+                  aria-label={`Hapus ${body.name}`}
+                >
+                  <Trash2 size={12} />
+                </button>
+              )}
               {isSun && (
                 <span className="roster-status">
                   {connected ? <CheckCircle2 size={12} color="#5eead4" /> : <AlertCircle size={12} color="#8683a1" />}
@@ -817,7 +832,10 @@ function Roster({ allBodies, selectedId, onSelect, onEdit, connected, collapsed,
           );
         })}
       </div>
-    </div>
+        </>
+      )}
+      </div>
+    </>
   );
 }
 
@@ -1114,6 +1132,62 @@ function SettingsModal({ settings, onChange, onClose, onTest, testState, onReset
             <span className="switch-knob" />
           </button>
         </div>
+
+        {/* ===== WAKE WORD SETTINGS ===== */}
+        <div className="voice-section" style={{ marginTop: 14 }}>
+          <div className="voice-section-title font-display">
+            🎤 Wake Word Detection
+          </div>
+
+          <div className="toggle-row" style={{ marginBottom: 10 }}>
+            <div>
+              <div className="font-display" style={{ fontSize: 13 }}>Aktifkan wake word</div>
+              <div className="field-hint font-mono">Deteksi suara otomatis — sebut nama agent atau greeting untuk memulai.</div>
+            </div>
+            <button
+              className={`switch ${settings.wakeWordEnabled ? "switch-on" : ""}`}
+              onClick={() => onChange({ ...settings, wakeWordEnabled: !settings.wakeWordEnabled })}
+              aria-label="Toggle wake word"
+            >
+              <span className="switch-knob" />
+            </button>
+          </div>
+
+          <div className="toggle-row" style={{ marginBottom: 10 }}>
+            <div>
+              <div className="font-display" style={{ fontSize: 13 }}>Auto-kirim pesan (tanpa buka chat)</div>
+              <div className="field-hint font-mono">Setelah wake word terdeteksi, bicara pesan Anda → otomatis dikirim ke agent di background.</div>
+            </div>
+            <button
+              className={`switch ${settings.wakeWordAutoSend ? "switch-on" : ""}`}
+              onClick={() => onChange({ ...settings, wakeWordAutoSend: !settings.wakeWordAutoSend })}
+              aria-label="Toggle auto send"
+            >
+              <span className="switch-knob" />
+            </button>
+          </div>
+
+          <label className="field-label font-mono">Greeting wake words (pisah dengan koma)</label>
+          <input
+            className="text-input font-mono"
+            value={settings.wakeWordGreetings}
+            onChange={(e) => onChange({ ...settings, wakeWordGreetings: e.target.value })}
+            placeholder="selamat pagi,halo,hey,..."
+            style={{ fontSize: 11 }}
+          />
+          <p className="field-hint font-mono">Kata pemicu generik. Default: selamat pagi, siang, sore, malam, halo, hai, hi, hey, oi, woi.</p>
+
+          <label className="field-label font-mono">Custom wake words (pisah dengan koma)</label>
+          <input
+            className="text-input font-mono"
+            value={settings.wakeWordCustom}
+            onChange={(e) => onChange({ ...settings, wakeWordCustom: e.target.value })}
+            placeholder="hey artech,bang,assalamualaikum,..."
+            style={{ fontSize: 11 }}
+          />
+          <p className="field-hint font-mono">Tambah kata pemicu sendiri. Nama agent otomatis terdeteksi (dinamis).</p>
+        </div>
+        {/* ===== END WAKE WORD SETTINGS ===== */}
 
         <div className="toggle-row">
           <div>
@@ -1707,6 +1781,10 @@ const DEFAULT_SETTINGS: AppSettings = {
   autonomousMode: false,
   autonomousIntervalMin: 10,
   sessionIdleTimeoutMin: 30,
+  wakeWordEnabled: true,
+  wakeWordGreetings: "selamat pagi,selamat siang,selamat sore,selamat malam,halo,hai,hi,hey,oi,woi",
+  wakeWordCustom: "",
+  wakeWordAutoSend: true,
 };
 
 /* ------------------------------------------------------------------ */
@@ -1805,35 +1883,6 @@ function CentralReactorLogo({ allBodies, activeAgentId, speakingId, switching, o
         </span>
       </button>
 
-      {/* Agent selector — pilih agent lain (trigger switch) */}
-      <div className="central-agent-selector">
-        {allBodies.map((agent) => {
-          const isActive = agent.id === current.id;
-          return (
-            <button
-              key={agent.id}
-              className={`central-agent-chip${isActive ? " active" : ""}`}
-              onClick={() => onSelect(agent.id)}
-              title={`${agent.name} · ${agent.role}`}
-              style={{
-                background: isActive ? `${agent.color}22` : "rgba(255,255,255,0.04)",
-                borderColor: isActive ? agent.color : "rgba(255,255,255,0.1)",
-                color: isActive ? agent.glow : "#8683a1",
-                boxShadow: isActive ? `0 0 0.8vmin ${agent.color}66` : "none",
-              }}
-            >
-              <span
-                className="central-agent-dot"
-                style={{
-                  background: agent.color,
-                  boxShadow: isActive ? `0 0 0.5vmin ${agent.glow}` : "none",
-                }}
-              />
-              <span className="font-mono">{agent.name}</span>
-            </button>
-          );
-        })}
-      </div>
     </div>
   );
 }
@@ -1863,6 +1912,15 @@ export default function ArtechOrchestrator() {
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
 
   const recognitionRef = useRef<any>(null);
+  const wakeWordsRef = useRef<{ agents: Array<{ id: string; name: string; keywords: string[] }>; generics: string[] }>({ agents: [], generics: [] });
+  const [listening, setListening] = useState(false);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+  // Refs for speech recognition callback (always latest values)
+  const allBodiesRef = useRef<Agent[]>([]);
+  const sessionInfoRef = useRef<SessionInfo | null>(null);
+  const coreMetaRef = useRef<Agent | null>(null);
+  const pendingVoiceAgentRef = useRef<string | null>(null);  // agent ID yang menunggu pesan voice
+  const [voiceReply, setVoiceReply] = useState<{ agentName: string; text: string; color: string } | null>(null);
   const sessionKeyRef = useRef<string>(typeof window !== "undefined" ? (sessionStorage.getItem("artech-session-key") || `ses-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`) : "");
 
   // Persist sessionKey
@@ -1907,6 +1965,11 @@ export default function ArtechOrchestrator() {
         const settingsRes = await fetch("/api/settings");
         if (settingsRes.ok) {
           const s = await settingsRes.json();
+          // Baca wake word settings dari localStorage (frontend-only)
+          const wwEnabled = typeof window !== "undefined" ? localStorage.getItem("artech-wake-word-enabled") : null;
+          const wwGreetings = typeof window !== "undefined" ? localStorage.getItem("artech-wake-word-greetings") : null;
+          const wwCustom = typeof window !== "undefined" ? localStorage.getItem("artech-wake-word-custom") : null;
+          const wwAutoSend = typeof window !== "undefined" ? localStorage.getItem("artech-wake-word-autosend") : null;
           setSettings({
             webhookUrl: s.webhookUrl || "",
             n8nBaseUrl: s.n8nBaseUrl || "https://artha.loophole.site",
@@ -1915,6 +1978,10 @@ export default function ArtechOrchestrator() {
             autonomousMode: s.autonomousMode ?? false,
             autonomousIntervalMin: s.autonomousIntervalMin ?? 10,
             sessionIdleTimeoutMin: s.sessionIdleTimeoutMin ?? 30,
+            wakeWordEnabled: wwEnabled !== null ? wwEnabled === "true" : true,
+            wakeWordGreetings: wwGreetings !== null && wwGreetings !== "" ? wwGreetings : "selamat pagi,selamat siang,selamat sore,selamat malam,halo,hai,hi,hey,oi,woi",
+            wakeWordCustom: wwCustom || "",
+            wakeWordAutoSend: wwAutoSend !== null ? wwAutoSend === "true" : true,
           });
         }
       } catch { /* settings optional */ }
@@ -2095,6 +2162,14 @@ export default function ArtechOrchestrator() {
   /* ---- save settings ke API ---- */
   const saveSettings = useCallback((s: AppSettings) => {
     setSettings(s);
+    // Wake word settings disimpan di localStorage (frontend-only)
+    if (typeof window !== "undefined") {
+      localStorage.setItem("artech-wake-word-enabled", String(s.wakeWordEnabled));
+      localStorage.setItem("artech-wake-word-greetings", s.wakeWordGreetings);
+      localStorage.setItem("artech-wake-word-custom", s.wakeWordCustom);
+      localStorage.setItem("artech-wake-word-autosend", String(s.wakeWordAutoSend));
+    }
+    // Server settings (DB) — hanya field yang didukung API
     fetch("/api/settings", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -2165,6 +2240,24 @@ export default function ArtechOrchestrator() {
     setSelectedId(id);
   }, []);
 
+  /* ---- delete agent ---- */
+  const handleDeleteAgent = useCallback(async (agentId: string) => {
+    try {
+      const res = await fetch(`/api/agents/${agentId}`, { method: "DELETE" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Gagal hapus agent");
+      }
+      setAgents((prev) => prev.filter((a) => a.id !== agentId));
+      setCoreMeta((prev) => prev && prev.id === agentId ? null : prev);
+      setDrawerAgentId((cur) => cur === agentId ? null : cur);
+      setSelectedId((cur) => cur === agentId ? null : cur);
+      showToast("Agent dihapus.", "info");
+    } catch (e: any) {
+      showToast(`Error: ${e.message}`, "error");
+    }
+  }, [showToast]);
+
   const select = (id: string) => {
     setSelectedId(id);
     setZoomedId((z) => z === id ? null : id);
@@ -2175,6 +2268,218 @@ export default function ArtechOrchestrator() {
       switchingTimer.current = setTimeout(() => setSwitchingAgent(false), 700);
     }
   };
+
+  /* ---- Send voice message in background (no drawer) ---- */
+  const sendVoiceMessage = useCallback(async (agentId: string, message: string) => {
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message, sessionKey: sessionKeyRef.current }),
+      });
+      if (!res.ok) throw new Error("Gagal kirim pesan voice");
+      const data = await res.json();
+      const reply = data.reply || "(tidak ada balasan)";
+      const agentName = data.agent?.name || "Agent";
+      const agentColor = data.agent?.color || "#5eead4";
+      const agentGlow = data.agent?.glow || agentColor;
+
+      // Tampilkan reply sebagai floating notification
+      setVoiceReply({ agentName, text: reply, color: agentColor });
+      // Auto-hide setelah 12 detik
+      setTimeout(() => setVoiceReply(null), 12000);
+
+      // Speak reply via TTS kalau voice enabled
+      if (settings.voiceEnabled && typeof window !== "undefined" && "speechSynthesis" in window) {
+        try {
+          window.speechSynthesis.cancel();
+          const utter = new SpeechSynthesisUtterance(reply.slice(0, 500));
+          utter.lang = "id-ID";
+          utter.rate = data.agent?.voiceRate ?? 1;
+          utter.pitch = data.agent?.voicePitch ?? 1;
+          window.speechSynthesis.speak(utter);
+        } catch {}
+      }
+
+      // Update messages store supaya kalau drawer dibuka pesannya ada
+      if (data.session) {
+        setSessionInfo(data.session);
+      }
+      setMessagesByAgent((prev) => ({
+        ...prev,
+        [agentId]: [
+          ...(prev[agentId] || []),
+          { id: uid(), role: "user", text: message, timestamp: Date.now() },
+          { id: uid(), role: "agent", text: reply, timestamp: Date.now() },
+        ],
+      }));
+    } catch (e: any) {
+      showToast(`Voice error: ${e.message}`, "error");
+    }
+  }, [settings.voiceEnabled, showToast]);
+
+  /* ---- Wake words builder: dynamic dari allBodies + settings ---- */
+  useEffect(() => {
+    // Sync refs untuk speech recognition callback
+    allBodiesRef.current = allBodies;
+    sessionInfoRef.current = sessionInfo;
+    coreMetaRef.current = coreMeta;
+
+    const agentWords = allBodies.map((a) => {
+      const keywords: string[] = [];
+      if (a.name) keywords.push(a.name.toLowerCase().trim());
+      if (a.routingKeywords) {
+        a.routingKeywords.split(",").forEach((k) => {
+          const kw = k.trim().toLowerCase();
+          if (kw) keywords.push(kw);
+        });
+      }
+      if (a.id) keywords.push(a.id.toLowerCase().trim());
+      return { id: a.id, name: a.name, keywords: keywords.filter(Boolean) };
+    });
+    // Gabungkan greetings dari settings + custom wake words
+    const greetingList = (settings.wakeWordGreetings || "")
+      .split(",").map((g) => g.trim().toLowerCase()).filter(Boolean);
+    const customList = (settings.wakeWordCustom || "")
+      .split(",").map((c) => c.trim().toLowerCase()).filter(Boolean);
+    const generics = [...greetingList, ...customList];
+    wakeWordsRef.current = { agents: agentWords, generics };
+  }, [allBodies, settings.wakeWordGreetings, settings.wakeWordCustom]);
+
+  /* ---- Speech Recognition (auto-detect, continuous, no mic button) ---- */
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SR) {
+      setVoiceError("Browser tidak support Speech Recognition. Gunakan Chrome.");
+      return;
+    }
+    if (!settings.voiceEnabled || !settings.wakeWordEnabled) {
+      // Stop recognition if voice disabled
+      if (recognitionRef.current) {
+        try { recognitionRef.current.stop(); } catch {}
+        recognitionRef.current = null;
+      }
+      setListening(false);
+      return;
+    }
+
+    const recognition = new SR();
+    recognition.continuous = true;
+    recognition.interimResults = false;
+    recognition.lang = "id-ID";
+
+    recognition.onstart = () => {
+      setListening(true);
+      setVoiceError(null);
+    };
+
+    recognition.onresult = (event: any) => {
+      // Ambil hasil terakhir
+      const last = event.results[event.results.length - 1];
+      if (!last || !last.isFinal) return;
+      const transcript = (last[0].transcript || "").toLowerCase().trim();
+      if (!transcript) return;
+
+      // Mode 1: Jika sedang menunggu pesan voice (pendingVoiceAgent), kirim transcript sebagai pesan
+      if (pendingVoiceAgentRef.current) {
+        const agentId = pendingVoiceAgentRef.current;
+        pendingVoiceAgentRef.current = null;
+        const agentBody = allBodiesRef.current.find((a) => a.id === agentId);
+        showToast(`🎤 Mengirim ke ${agentBody?.name || "agent"}: "${transcript.slice(0, 40)}..."`, "info");
+        // Kirim pesan ke agent di background (tanpa buka drawer)
+        sendVoiceMessage(agentId, transcript);
+        return;
+      }
+
+      // Mode 2: Deteksi wake word
+      const { agents, generics } = wakeWordsRef.current;
+      let matchedAgent: { id: string; name: string } | null = null;
+
+      for (const ag of agents) {
+        for (const kw of ag.keywords) {
+          if (kw.length >= 2 && transcript.includes(kw)) {
+            matchedAgent = { id: ag.id, name: ag.name };
+            break;
+          }
+        }
+        if (matchedAgent) break;
+      }
+
+      if (matchedAgent) {
+        setSelectedId(matchedAgent.id);
+        if (settings.wakeWordAutoSend) {
+          // Auto-send mode: set pending agent, tunggu pesan berikutnya
+          pendingVoiceAgentRef.current = matchedAgent.id;
+          showToast(`🎤 "${matchedAgent.name}" aktif. Silakan bicara pesan Anda...`, "info");
+        } else {
+          // Non-auto mode: buka chat drawer
+          setDrawerAgentId(matchedAgent.id);
+          showToast(`🎤 Voice: "${matchedAgent.name}" terdeteksi`, "info");
+        }
+        return;
+      }
+
+      // Cek generic greetings
+      const isGreeting = generics.some((g) => transcript.includes(g));
+      if (isGreeting) {
+        const si = sessionInfoRef.current;
+        const cm = coreMetaRef.current;
+        const ab = allBodiesRef.current;
+        const targetId = si?.activeAgentId || cm?.id || (ab[0]?.id ?? null);
+        if (targetId) {
+          const targetBody = ab.find((a) => a.id === targetId);
+          setSelectedId(targetId);
+          if (settings.wakeWordAutoSend) {
+            pendingVoiceAgentRef.current = targetId;
+            showToast(`🎤 ${targetBody?.name || "Agent"} aktif. Silakan bicara pesan Anda...`, "info");
+          } else {
+            setDrawerAgentId(targetId);
+            showToast(`🎤 Voice: greeting → ${targetBody?.name || "agent"}`, "info");
+          }
+        }
+        return;
+      }
+    };
+
+    recognition.onerror = (event: any) => {
+      if (event.error === "not-allowed" || event.error === "service-not-allowed") {
+        setVoiceError("Akses mikrofon ditolak. Izinkan mikrofon di browser.");
+        setListening(false);
+      } else if (event.error === "no-speech") {
+        // Normal — restart akan handle
+      } else if (event.error === "aborted") {
+        // Normal — stop manual
+      } else {
+        setVoiceError(`Voice error: ${event.error}`);
+      }
+    };
+
+    recognition.onend = () => {
+      setListening(false);
+      // Auto-restart jika voice masih enabled (continuous listening)
+      if (settings.voiceEnabled && settings.wakeWordEnabled && recognitionRef.current === recognition) {
+        try {
+          setTimeout(() => {
+            try { recognition.start(); } catch {}
+          }, 500);
+        } catch {}
+      }
+    };
+
+    recognitionRef.current = recognition;
+    try {
+      recognition.start();
+    } catch (err: any) {
+      // start() throws jika sudah started — ignore
+    }
+
+    return () => {
+      recognitionRef.current = null;
+      try { recognition.stop(); } catch {}
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings.voiceEnabled, settings.wakeWordEnabled, settings.wakeWordAutoSend]);
 
   const selectedBody = drawerAgentId ? getBody(drawerAgentId) : null;
   const selectedMessages = drawerAgentId ? (messagesByAgent[drawerAgentId] || []) : [];
@@ -2203,7 +2508,7 @@ export default function ArtechOrchestrator() {
   return (
     <div className="artech-app">
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Unbounded:wght@400;600;800&family=Manrope:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;700;900&family=Unbounded:wght@400;600;800&family=Manrope:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap');
 
         .artech-app{
           --void:#05060d; --nebula2:#1d1740; --solar:#ffb454; --ion:#5eead4;
@@ -2215,6 +2520,7 @@ export default function ArtechOrchestrator() {
         }
         .font-display{ font-family:'Unbounded', sans-serif; }
         .font-mono{ font-family:'JetBrains Mono', monospace; }
+        .font-futuristic{ font-family:'Orbitron', sans-serif; }
 
         @keyframes twinkle{ 0%,100%{opacity:.25;} 50%{opacity:1;} }
         @keyframes drift{ 0%{transform:translate(0,0);} 50%{transform:translate(3%,-4%);} 100%{transform:translate(0,0);} }
@@ -2227,10 +2533,14 @@ export default function ArtechOrchestrator() {
 
         .nebula-blob{ position:absolute; width:60vmax; height:60vmax; border-radius:50%; animation: drift 22s ease-in-out infinite; }
 
-        .topbar{ position:relative; z-index:5; display:flex; align-items:center; justify-content:space-between; padding:14px 20px; border-bottom:1px solid rgba(255,255,255,0.08); }
+        .topbar{ position:relative; z-index:5; display:flex; align-items:center; justify-content:space-between; padding:40px 20px 20px; border-bottom:1px solid rgba(255,255,255,0.08); }
         .brand{ display:flex; align-items:center; gap:10px; }
-        .brand-title{ font-size:16px; letter-spacing:.02em; }
-        .brand-sub{ font-size:10px; color:var(--dust); }
+        .topbar{ justify-content:center; }
+        .brand{ position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); text-align:center; pointer-events:none; }
+        .brand-title{ font-size:22px; letter-spacing:.32em; font-family:'Orbitron', sans-serif; font-weight:900; }
+        .brand-sub{ font-size:10px; letter-spacing:.28em; color:var(--dust); font-family:'Orbitron', sans-serif; font-weight:400; text-transform:uppercase; margin-top:2px; }
+        .topbar-left{ position:absolute; left:16px; top:50%; transform:translateY(-50%); z-index:6; }
+        .topbar-right{ position:absolute; right:16px; top:50%; transform:translateY(-50%); z-index:6; }
         .top-actions{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
         .pill{ display:flex; align-items:center; gap:6px; padding:6px 10px; border-radius:999px; border:1px solid rgba(255,255,255,0.1); font-size:11px; background:transparent; color:inherit; cursor:pointer; }
         .pill:hover{ background:rgba(255,255,255,0.05); }
@@ -2241,8 +2551,9 @@ export default function ArtechOrchestrator() {
         .main{ position:relative; z-index:2; flex:1; display:flex; min-height:0; }
 
         /* ROSTER (sidebar) — collapsible */
-        .roster{ display:flex; flex-direction:column; gap:8px; padding:14px; width:230px; flex-shrink:0; border-right:1px solid rgba(255,255,255,0.07); overflow:hidden; background:rgba(5,6,13,0.72); backdrop-filter:blur(10px); z-index:3; transition: width .3s ease; }
-        .roster-collapsed{ width:56px; padding:14px 8px; align-items:center; }
+        /* Roster jadi overlay — tidak menggeser orbit-stage, logo tetap di tengah */
+        .roster{ position:fixed; top:0; left:0; bottom:0; z-index:40; display:flex; flex-direction:column; gap:8px; padding:70px 14px 14px; width:230px; flex-shrink:0; border-right:1px solid rgba(255,255,255,0.07); overflow:hidden; background:rgba(5,6,13,0.72); backdrop-filter:blur(10px); transition: transform .3s ease, opacity .3s ease; }
+        .roster-collapsed{ transform:translateX(-100%); opacity:0; pointer-events:none; }
         .roster-header{ display:flex; align-items:center; justify-content:space-between; }
         .roster-add-btn{ width:100%; justify-content:center; color:#5eead4 !important; border-color:rgba(94,234,212,0.3) !important; }
         .roster-list{ display:flex; flex-direction:column; gap:6px; overflow-y:auto; max-height:calc(100vh - 220px); }
@@ -2255,6 +2566,7 @@ export default function ArtechOrchestrator() {
         .roster-edit-btn{ background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.08); color:var(--dust); width:26px; height:26px; border-radius:6px; display:flex; align-items:center; justify-content:center; cursor:pointer; opacity:0; transition: all .2s ease; flex-shrink:0; padding:0; }
         .roster-item:hover .roster-edit-btn{ opacity:1; }
         .roster-edit-btn:hover{ background:rgba(94,234,212,0.15); border-color:var(--ion); color:var(--ion); }
+        .roster-delete-btn:hover{ background:rgba(255,128,128,0.15) !important; border-color:#ff8080 !important; color:#ff8080 !important; }
         .roster-dot{ width:8px; height:8px; border-radius:50%; flex-shrink:0; }
         .roster-dot-btn{ width:14px; height:14px; border-radius:50%; border:none; cursor:pointer; padding:0; margin:4px 0; }
         .roster-dot-btn[data-active="true"]{ width:20px; height:20px; }
@@ -2264,7 +2576,7 @@ export default function ArtechOrchestrator() {
         .roster-level{ font-size:10px; color:var(--dust); }
         .roster-status{ display:flex; }
 
-        .orbit-stage{ flex:1; position:relative; overflow:hidden; }
+        .orbit-stage{ flex:1; position:relative; overflow:hidden; width:100%; }
         .orbit-ring{ position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); border-radius:50%; border:1px solid rgba(255,255,255,0.06); pointer-events:none; }
         .orbit-spin{ position:absolute; inset:0; }
         .planet-anchor{ position:absolute; top:0; left:50%; }
@@ -2314,9 +2626,10 @@ export default function ArtechOrchestrator() {
         .glass-panel{ background:linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.015)); border:1px solid rgba(255,255,255,0.09); backdrop-filter: blur(16px); }
 
         /* HOLO DRAWER — panel chat hologram di tengah */
-        .holo-drawer{ position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); z-index:30; width:440px; max-width:92vw; max-height:78vh; pointer-events:none; opacity:0; transition: opacity .3s ease; }
-        .holo-drawer.holo-open{ opacity:1; pointer-events:auto; animation: holo-in .35s cubic-bezier(0.34,1.56,0.64,1); }
-        .holo-panel{ width:100%; max-height:78vh; display:flex; flex-direction:column; padding:16px; border-radius:18px; border:1.5px solid rgba(255,255,255,0.18); background:rgba(5,6,13,0.85); box-shadow: 0 0 4vmin rgba(94,234,212,0.15), 0 0 1vmin rgba(255,255,255,0.08); backdrop-filter: blur(20px); }
+        .holo-drawer{ position:fixed; bottom:20px; left:20px; z-index:30; width:380px; max-width:calc(100vw - 40px); max-height:70vh; pointer-events:none; opacity:0; transition: opacity .3s ease, transform .3s ease; transform:translateY(20px); }
+        .holo-drawer.holo-open{ opacity:1; pointer-events:auto; transform:translateY(0); animation: holo-in-bl .35s cubic-bezier(0.34,1.56,0.64,1); }
+        @keyframes holo-in-bl{ from{ opacity:0; transform:translateY(30px) scale(0.95); } to{ opacity:1; transform:translateY(0) scale(1); } }
+        .holo-panel{ width:100%; max-height:70vh; display:flex; flex-direction:column; padding:16px; border-radius:16px; border:1.5px solid rgba(94,180,255,0.4); background:linear-gradient(135deg, rgba(10,30,60,0.92) 0%, rgba(20,50,100,0.88) 50%, rgba(10,30,70,0.92) 100%); box-shadow: 0 0 3vmin rgba(94,180,255,0.3), 0 0 1vmin rgba(94,180,255,0.15), inset 0 0 2vmin rgba(94,180,255,0.08); backdrop-filter: blur(20px); }
         .holo-header{ display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }
         .holo-header-title{ display:flex; align-items:center; gap:10px; }
         .holo-visualizer-row{ display:flex; flex-direction:column; align-items:center; gap:4px; padding:4px 0 10px; border-bottom:1px solid rgba(255,255,255,0.07); margin-bottom:10px; }
@@ -2394,8 +2707,8 @@ export default function ArtechOrchestrator() {
         .toast{ position:fixed; bottom:20px; left:50%; transform:translateX(-50%); z-index:60; padding:10px 16px; border-radius:999px; font-size:12px; }
 
         @media (max-width: 860px){
-          .roster{ position:fixed; top:0; left:0; bottom:0; z-index:40; width:240px; }
-          .roster-collapsed{ transform:translateX(-100%); }
+          .roster{ width:240px; padding-top:70px; }
+          .roster-collapsed{ transform:translateX(-100%); opacity:0; pointer-events:none; }
           .holo-drawer{ width:96vw; max-width:96vw; }
           .top-actions .pill{ font-size:10px; padding:5px 8px; }
         }
@@ -2409,11 +2722,11 @@ export default function ArtechOrchestrator() {
           position:absolute; inset:0; width:100%; height:100%;
           border-radius:50%; overflow:hidden;
           container-type:size;
-          mix-blend-mode:screen;
         }
         .arc-reactor-canvas{
           position:absolute; inset:0; width:100%; height:100%;
           display:block; border-radius:50%;
+          mix-blend-mode:screen;
         }
         .arc-reactor-ring{
           position:absolute; inset:4%; border-radius:50%;
@@ -2435,7 +2748,6 @@ export default function ArtechOrchestrator() {
         .arc-reactor-name-line{
           display:block;
           white-space:nowrap;
-          text-shadow:0 0 4px #05060d, 0 0 8px #05060d;
           animation: arc-name-fade 0.4s ease;
           position:relative; z-index:2;
         }
@@ -2520,6 +2832,43 @@ export default function ArtechOrchestrator() {
           transition: transform .15s ease, box-shadow .15s ease;
         }
         .color-preset-btn:hover{ transform:scale(1.18); }
+
+        /* Voice reply floating card (background mode) */
+        .voice-reply-card{
+          position:fixed; bottom:20px; right:20px; z-index:40;
+          width:340px; max-width:calc(100vw - 40px);
+          padding:14px 16px;
+          border-radius:14px;
+          border:1.5px solid rgba(94,180,255,0.4);
+          background:linear-gradient(135deg, rgba(10,30,60,0.94) 0%, rgba(20,50,100,0.90) 50%, rgba(10,30,70,0.94) 100%);
+          backdrop-filter:blur(20px);
+          animation: voice-reply-in .4s cubic-bezier(0.34,1.56,0.64,1);
+        }
+        @keyframes voice-reply-in{
+          from{ opacity:0; transform:translateY(20px) scale(0.95); }
+          to{ opacity:1; transform:translateY(0) scale(1); }
+        }
+        .voice-reply-header{
+          display:flex; align-items:center; gap:8px; margin-bottom:8px;
+        }
+        .voice-reply-dot{
+          width:8px; height:8px; border-radius:50%; flex-shrink:0;
+        }
+        .voice-reply-name{
+          font-size:13px; font-weight:600; flex:1;
+        }
+        .voice-reply-close{
+          background:transparent; border:none; color:#8683a1;
+          cursor:pointer; padding:2px; border-radius:4px;
+          display:flex; align-items:center; justify-content:center;
+        }
+        .voice-reply-close:hover{ color:#eae8f5; background:rgba(255,255,255,0.08); }
+        .voice-reply-text{
+          font-size:12px; line-height:1.5; color:#eae8f5;
+          max-height:200px; overflow-y:auto;
+        }
+        .voice-reply-text::-webkit-scrollbar{ width:3px; }
+        .voice-reply-text::-webkit-scrollbar-thumb{ background:rgba(94,180,255,0.3); border-radius:3px; }
 
         /* ===== CENTRAL REACTOR LOGO (no solar system — single central logo) ===== */
         .central-reactor-stage{
@@ -2689,42 +3038,41 @@ export default function ArtechOrchestrator() {
           white-space:nowrap;
         }
 
-        /* Agent selector chips di bawah logo */
-        .central-agent-selector{
-          position:relative; z-index:3;
-          display:flex; flex-wrap:wrap; gap:0.8vmin;
-          justify-content:center; align-items:center;
-          max-width:90vmin; padding:0 2vmin;
-        }
-        .central-agent-chip{
-          display:flex; align-items:center; gap:0.6vmin;
-          padding:0.7vmin 1.2vmin;
-          border-radius:999px;
+        /* Hamburger button (3-strip menu toggle) */
+        .hamburger-btn{ border-radius:8px !important; }
+        .hamburger-btn:hover{ background:rgba(94,234,212,0.15) !important; color:var(--ion) !important; }
+        .hamburger-floating{
+          position:fixed; top:64px; left:16px; z-index:41;
+          background:rgba(5,6,13,0.7); backdrop-filter:blur(10px);
           border:1px solid rgba(255,255,255,0.1);
-          background:rgba(255,255,255,0.04);
-          cursor:pointer;
-          font-size:1.5vmin;
-          color:#8683a1;
-          transition: all .25s ease;
         }
-        .central-agent-chip:hover{
-          background:rgba(255,255,255,0.08);
-          border-color:rgba(255,255,255,0.25);
-          color:#eae8f5;
-          transform:translateY(-1px);
+
+        /* Voice listening indicator */
+        .voice-listening-pill{
+          color:#5eead4 !important;
+          border-color:rgba(94,234,212,0.4) !important;
+          background:rgba(94,234,212,0.08) !important;
+          font-size:10px !important;
         }
-        .central-agent-chip.active{
-          font-weight:600;
+        .voice-listening-dot{
+          width:6px; height:6px; border-radius:50%;
+          background:#5eead4;
+          box-shadow:0 0 6px #5eead4;
+          animation: voice-pulse 1.5s ease-in-out infinite;
         }
-        .central-agent-dot{
-          width:0.9vmin; height:0.9vmin; border-radius:50%;
-          flex-shrink:0;
-          transition: box-shadow .25s ease;
+        @keyframes voice-pulse{
+          0%,100%{ opacity:0.4; transform:scale(0.8); }
+          50%{ opacity:1; transform:scale(1.2); }
+        }
+        .voice-error-pill{
+          color:#ff8080 !important;
+          border-color:rgba(255,128,128,0.4) !important;
+          background:rgba(255,128,128,0.08) !important;
+          font-size:10px !important;
         }
 
         @media (max-width: 768px){
           .central-logo-btn{ width:60vmin; height:60vmin; }
-          .central-agent-chip{ font-size:2.4vmin; padding:1vmin 1.6vmin; }
           .cr-status-label{ font-size:2.4vmin; top:-5vmin; }
           .cr-role-label{ font-size:2.2vmin; bottom:-5vmin; }
         }
@@ -2735,11 +3083,23 @@ export default function ArtechOrchestrator() {
       <header className="topbar">
         <div className="brand">
           <div>
-            <div className="brand-title font-display">ARTECH</div>
-            <div className="brand-sub font-mono">multi-agent orchestrator</div>
+            <div className="brand-title">ARTECH</div>
+            <div className="brand-sub">multi-agent orchestrator</div>
           </div>
         </div>
-        <div className="top-actions">
+        <div className="topbar-right">
+          <div className="top-actions">
+          {listening && (
+            <span className="pill font-mono voice-listening-pill" title="Voice recognition aktif — sebut nama agent atau greeting">
+              <span className="voice-listening-dot" />
+              Listening
+            </span>
+          )}
+          {voiceError && (
+            <span className="pill font-mono voice-error-pill" title={voiceError}>
+              <AlertCircle size={12} /> Mic
+            </span>
+          )}
           {sessionInfo?.mode === "bypass" && sessionInfo.activeAgentId && (() => {
             const sb = getBody(sessionInfo.activeAgentId);
             if (!sb) return null;
@@ -2787,6 +3147,7 @@ export default function ArtechOrchestrator() {
             <Settings size={16} />
           </button>
         </div>
+        </div>
       </header>
 
       <main className="main">
@@ -2795,6 +3156,7 @@ export default function ArtechOrchestrator() {
           selectedId={selectedId}
           onSelect={select}
           onEdit={(id) => setRenameAgentId(id)}
+          onDelete={handleDeleteAgent}
           connected={connected}
           collapsed={rosterCollapsed}
           onToggleCollapse={() => setRosterCollapsed((v) => !v)}
@@ -2851,6 +3213,20 @@ export default function ArtechOrchestrator() {
       {toast && (
         <div className="toast glass-panel font-mono" style={{ color: toast.type === "error" ? "#ff8080" : toast.type === "level" ? "#ffb454" : "#eae8f5" }} key={toast.key}>
           {toast.msg}
+        </div>
+      )}
+
+      {/* Voice reply floating notification (background mode) */}
+      {voiceReply && (
+        <div className="voice-reply-card" style={{ borderColor: `${voiceReply.color}66`, boxShadow: `0 0 2vmin ${voiceReply.color}33, 0 0 1vmin ${voiceReply.color}22` }}>
+          <div className="voice-reply-header">
+            <span className="voice-reply-dot" style={{ background: voiceReply.color, boxShadow: `0 0 0.6vmin ${voiceReply.color}` }} />
+            <span className="font-display voice-reply-name" style={{ color: voiceReply.color }}>{voiceReply.agentName}</span>
+            <button className="voice-reply-close" onClick={() => setVoiceReply(null)} aria-label="Tutup">
+              <X size={14} />
+            </button>
+          </div>
+          <div className="voice-reply-text font-mono">{voiceReply.text}</div>
         </div>
       )}
     </div>
