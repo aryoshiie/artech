@@ -3,11 +3,12 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import mammoth from "mammoth";
 import * as XLSX from "xlsx";
+import { startRegistration } from "@simplewebauthn/browser";
 import {
   Settings, Send, Paperclip, X, Volume2, VolumeX, Power,
   Loader2, CheckCircle2, AlertCircle,
   Trash2, FileText, File as FileIcon, Menu, Orbit, Plus, Pencil,
-  MessageCircle, ChevronLeft, Copy,
+  MessageCircle, ChevronLeft, Copy, KeyRound, Fingerprint,
 } from "lucide-react";
 
 /* ------------------------------------------------------------------ */
@@ -201,7 +202,7 @@ async function processFile(file: File): Promise<MessageFile> {
     }
     const dataUrl = await readAsDataUrl(file);
     return { ...base, kind: "binary", content: dataUrl };
-  } catch (e) {
+  } catch (e: any) {
     return { ...base, kind: "error", content: String((e && e.message) || e) };
   }
 }
@@ -348,6 +349,102 @@ function GalaxyField() {
 }
 
 /* ------------------------------------------------------------------ */
+/*  PLANET HOLOGRAM — tekstur wireframe partikel ala proyeksi holografik */
+/*  (garis lintang/bujur + jejak sirkuit + titik cahaya, warna per-agent) */
+/* ------------------------------------------------------------------ */
+
+// Generator angka acak deterministik dari seed string — supaya tekstur tiap
+// planet konsisten antar render (tidak "berubah-ubah" tiap kali komponen
+// re-render) tapi tetap unik untuk masing-masing agent.
+function seededRandom(seed: string) {
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) h = (Math.imul(h, 31) + seed.charCodeAt(i)) >>> 0;
+  return () => {
+    h = (Math.imul(h, 1664525) + 1013904223) >>> 0;
+    return h / 4294967296;
+  };
+}
+
+// Durasi rotasi-diri planet (independen dari orbit) — variatif per agent
+// tapi stabil (bukan random tiap render), berdasarkan hash id agent.
+function selfSpinSeconds(id: string, min = 9, max = 21): number {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (Math.imul(h, 31) + id.charCodeAt(i)) >>> 0;
+  return min + (h % (max - min));
+}
+
+function PlanetHologram({ seed, color, glow }: { seed: string; color: string; glow: string }) {
+  const tex = useMemo(() => {
+    const rnd = seededRandom(seed);
+    // Garis lintang — ellipse pipih mengikuti kelengkungan bola dilihat dari depan
+    const lats = Array.from({ length: 6 }).map((_, i) => ({
+      ry: 5 + i * 8 + rnd() * 2.5,
+      op: 0.22 + rnd() * 0.28,
+    }));
+    // Garis bujur — ellipse tegak yang diputar mengelilingi pusat
+    const lons = Array.from({ length: 6 }).map((_, i) => ({
+      rot: i * 30 + rnd() * 10,
+      op: 0.16 + rnd() * 0.22,
+    }));
+    // "Jejak sirkuit/peta kota" — kotak-kotak kecil bersudut siku, khas tampilan holografik
+    const traces = Array.from({ length: 10 }).map(() => ({
+      x: 14 + rnd() * 68,
+      y: 14 + rnd() * 68,
+      w: 3 + rnd() * 9,
+      h: 3 + rnd() * 9,
+      op: 0.25 + rnd() * 0.35,
+    }));
+    // Titik cahaya kecil (seperti lampu kota / node data)
+    const dots = Array.from({ length: 26 }).map(() => ({
+      cx: 6 + rnd() * 88,
+      cy: 6 + rnd() * 88,
+      r: 0.5 + rnd() * 1.1,
+      op: 0.35 + rnd() * 0.55,
+    }));
+    return { lats, lons, traces, dots };
+  }, [seed]);
+
+  const gid = `pg-${seed}`;
+  const cid = `pc-${seed}`;
+
+  return (
+    <svg viewBox="0 0 100 100" className="planet-hologram" aria-hidden="true">
+      <defs>
+        <radialGradient id={gid} cx="35%" cy="32%" r="75%">
+          <stop offset="0%" stopColor={glow} stopOpacity="0.95" />
+          <stop offset="55%" stopColor={color} stopOpacity="0.6" />
+          <stop offset="100%" stopColor={color} stopOpacity="0.12" />
+        </radialGradient>
+        <clipPath id={cid}>
+          <circle cx="50" cy="50" r="49" />
+        </clipPath>
+      </defs>
+      <circle cx="50" cy="50" r="49" fill={`url(#${gid})`} />
+      <g clipPath={`url(#${cid})`}>
+        {tex.lats.map((l, i) => (
+          <ellipse key={"lat" + i} cx="50" cy="50" rx="48" ry={l.ry} fill="none" stroke={color} strokeWidth="0.55" opacity={l.op} />
+        ))}
+        {tex.lons.map((l, i) => (
+          <ellipse
+            key={"lon" + i}
+            cx="50" cy="50" rx="13" ry="48"
+            fill="none" stroke={color} strokeWidth="0.5" opacity={l.op}
+            transform={`rotate(${l.rot} 50 50)`}
+          />
+        ))}
+        {tex.traces.map((t, i) => (
+          <rect key={"tr" + i} x={t.x} y={t.y} width={t.w} height={t.h} rx="0.6" fill="none" stroke={glow} strokeWidth="0.5" opacity={t.op} />
+        ))}
+        {tex.dots.map((d, i) => (
+          <circle key={"dot" + i} cx={d.cx} cy={d.cy} r={d.r} fill={glow} opacity={d.op} />
+        ))}
+      </g>
+      <circle cx="50" cy="50" r="49" fill="none" stroke={color} strokeWidth="1" opacity="0.55" />
+    </svg>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /*  ORBIT VIEW — sistem tata surya + toggle popup per planet           */
 /* ------------------------------------------------------------------ */
 
@@ -379,17 +476,20 @@ function OrbitView({ agents, coreMeta, speakingId, selectedId, zoomedId, drawerA
     <div style={{ position: "relative", width: "100%", height: "100%" }}>
       {/* GALACTIC CORE — bintang terbesar di pusat */}
       <button
-        className="galactic-core-btn"
+        className={`galactic-core-btn${coreSpeaking ? " core-speaking" : ""}`}
         onClick={() => onSelect(coreMeta.id)}
         title={`${coreMeta.name} · ${coreMeta.role}`}
         style={{
           width: "14vmin", height: "14vmin",
           background: `radial-gradient(circle at 38% 34%, ${coreMeta.glow}, ${coreMeta.color} 55%, #ff9d3c 100%)`,
-          boxShadow: selectedId === coreMeta.id
+          boxShadow: selectedId === coreMeta.id || coreSpeaking
             ? `0 0 6vmin 2vmin ${coreMeta.color}88, 0 0 14vmin 5vmin ${coreMeta.color}33`
             : `0 0 5vmin 1.5vmin ${coreMeta.color}66, 0 0 12vmin 4vmin ${coreMeta.color}22`,
         }}
       >
+        <span className="planet-core-spin" style={{ animation: `spin ${selfSpinSeconds(coreMeta.id, 14, 26)}s linear infinite` }}>
+          <PlanetHologram seed={coreMeta.id} color={coreMeta.color} glow={coreMeta.glow} />
+        </span>
         <span className="core-arms" style={{ background: `conic-gradient(from 0deg, transparent 0deg, ${coreMeta.color}22 25deg, transparent 55deg, transparent 180deg, ${coreMeta.color}22 205deg, transparent 235deg)` }} />
         <span className="core-arms core-arms-2" style={{ background: `conic-gradient(from 90deg, transparent 0deg, ${coreMeta.glow}18 30deg, transparent 60deg, transparent 180deg, ${coreMeta.glow}18 210deg, transparent 240deg)` }} />
         {coreSpeaking && <SpeakingAura body={coreMeta} />}
@@ -436,13 +536,13 @@ function OrbitView({ agents, coreMeta, speakingId, selectedId, zoomedId, drawerA
                 }}
               >
                 <button
-                  className="planet-btn star-btn"
+                  className={`planet-btn star-btn${speaking ? " planet-speaking" : ""}`}
                   onClick={() => onSelect(agent.id)}
                   title={`${agent.name} · ${agent.role} · Lv.${agent.level}`}
                   style={{
                     width: `${agent.size}vmin`,
                     height: `${agent.size}vmin`,
-                    transform: (isZoomed || speaking) ? "scale(2.2)" : (isDrawer ? "scale(1.5)" : "scale(1)"),
+                    transform: speaking ? undefined : (isZoomed ? "scale(2.2)" : (isDrawer ? "scale(1.5)" : "scale(1)")),
                     zIndex: (isZoomed || speaking) ? 20 : (isSel ? 10 : 1),
                     background: `radial-gradient(circle at 35% 32%, ${agent.glow}, ${agent.color} 70%)`,
                     boxShadow: speaking
@@ -455,6 +555,15 @@ function OrbitView({ agents, coreMeta, speakingId, selectedId, zoomedId, drawerA
                     transition: "transform .6s cubic-bezier(0.34,1.56,0.64,1), box-shadow .3s ease",
                   }}
                 >
+                  <span
+                    className="planet-core-spin"
+                    style={{
+                      animation: `spin ${selfSpinSeconds(agent.id)}s linear infinite`,
+                      animationPlayState: isZoomed || isDrawer ? "paused" : "running",
+                    }}
+                  >
+                    <PlanetHologram seed={agent.id} color={agent.color} glow={agent.glow} />
+                  </span>
                   <span className="star-corona" style={{ background: `radial-gradient(circle, ${agent.glow}33, transparent 70%)` }} />
                   <span className="sub-system">
                     {(agent.tools || []).map((sub, si) => (
@@ -772,7 +881,78 @@ interface SettingsModalProps {
   allBodies: Agent[];
 }
 
+interface PasskeyItem {
+  id: string;
+  name: string | null;
+  createdAt: string;
+  lastUsedAt: string | null;
+}
+
 function SettingsModal({ settings, onChange, onClose, onTest, testState, onReset }: SettingsModalProps) {
+  // --- Manajemen Passkey (WebAuthn) ---
+  const [passkeys, setPasskeys] = useState<PasskeyItem[]>([]);
+  const [pkLoading, setPkLoading] = useState(false);
+  const [pkError, setPkError] = useState("");
+  const [pkDeviceName, setPkDeviceName] = useState("");
+
+  const loadPasskeys = useCallback(async () => {
+    try {
+      const res = await fetch("/api/auth/passkey/list");
+      if (res.ok) {
+        const data = await res.json();
+        setPasskeys(data.passkeys || []);
+      }
+    } catch {
+      /* silent — non-kritis untuk buka pengaturan */
+    }
+  }, []);
+
+  useEffect(() => {
+    loadPasskeys();
+  }, [loadPasskeys]);
+
+  async function handleAddPasskey() {
+    setPkError("");
+    setPkLoading(true);
+    try {
+      const optsRes = await fetch("/api/auth/passkey/register-options", { method: "POST" });
+      const optsData = await optsRes.json();
+      if (!optsRes.ok) throw new Error(optsData.error || "Gagal memulai registrasi passkey");
+
+      const attResp = await startRegistration({ optionsJSON: optsData.options });
+
+      const verifyRes = await fetch("/api/auth/passkey/register-verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ credential: attResp, name: pkDeviceName.trim() || undefined }),
+      });
+      const verifyData = await verifyRes.json();
+      if (!verifyRes.ok) throw new Error(verifyData.error || "Verifikasi registrasi passkey gagal");
+
+      setPkDeviceName("");
+      await loadPasskeys();
+    } catch (e: any) {
+      const msg = e?.message || "";
+      if (e?.name === "NotAllowedError" || msg.toLowerCase().includes("cancel")) {
+        // dibatalkan oleh user — tidak perlu tampilkan error
+      } else {
+        setPkError(msg || "Gagal menambah passkey");
+      }
+    } finally {
+      setPkLoading(false);
+    }
+  }
+
+  async function handleDeletePasskey(id: string) {
+    if (!confirm("Hapus passkey ini? Perangkat ini tidak akan bisa login pakai passkey lagi.")) return;
+    try {
+      await fetch(`/api/auth/passkey/${id}`, { method: "DELETE" });
+      await loadPasskeys();
+    } catch {
+      /* silent */
+    }
+  }
+
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal glass-panel" onClick={(e) => e.stopPropagation()}>
@@ -858,6 +1038,68 @@ function SettingsModal({ settings, onChange, onClose, onTest, testState, onReset
         </div>
         {testState === "ok" && <p className="font-mono" style={{ color: "#5eead4", fontSize: 12 }}>Terhubung — workflow merespons.</p>}
         {testState === "fail" && <p className="font-mono" style={{ color: "#ff8080", fontSize: 12 }}>Gagal terhubung. Periksa URL dan CORS di n8n.</p>}
+
+        {/* KEAMANAN — Manajemen Passkey (WebAuthn) */}
+        <div style={{ marginTop: 18, paddingTop: 14, borderTop: "1px solid rgba(255,255,255,0.08)" }}>
+          <div className="font-display" style={{ fontSize: 13, marginBottom: 4, display: "flex", alignItems: "center", gap: 6 }}>
+            <KeyRound size={14} /> Keamanan · Passkey
+          </div>
+          <p className="field-hint font-mono" style={{ marginBottom: 10 }}>
+            Login tanpa password pakai sidik jari / Face ID / Windows Hello. Daftarkan perangkat ini sebagai passkey.
+          </p>
+
+          {passkeys.length === 0 ? (
+            <p className="font-mono" style={{ fontSize: 11, color: "#8683a1", marginBottom: 10 }}>
+              Belum ada passkey terdaftar untuk akun ini.
+            </p>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 10 }}>
+              {passkeys.map((pk) => (
+                <div
+                  key={pk.id}
+                  style={{
+                    display: "flex", alignItems: "center", justifyContent: "space-between",
+                    padding: "8px 10px", borderRadius: 8,
+                    background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)",
+                  }}
+                >
+                  <div style={{ minWidth: 0 }}>
+                    <div className="font-mono" style={{ fontSize: 12 }}>{pk.name || "Passkey tanpa nama"}</div>
+                    <div className="font-mono" style={{ fontSize: 10, color: "#8683a1" }}>
+                      Dibuat {new Date(pk.createdAt).toLocaleDateString("id-ID")}
+                      {pk.lastUsedAt ? ` · terakhir dipakai ${new Date(pk.lastUsedAt).toLocaleDateString("id-ID")}` : ""}
+                    </div>
+                  </div>
+                  <button
+                    className="icon-btn"
+                    style={{ width: 28, height: 28, flexShrink: 0 }}
+                    onClick={() => handleDeletePasskey(pk.id)}
+                    title="Hapus passkey"
+                    aria-label="Hapus passkey"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div style={{ display: "flex", gap: 6 }}>
+            <input
+              className="text-input font-mono text-input-sm"
+              placeholder="Nama perangkat (opsional)"
+              value={pkDeviceName}
+              onChange={(e) => setPkDeviceName(e.target.value)}
+            />
+            <button className="btn font-mono" onClick={handleAddPasskey} disabled={pkLoading} style={{ flexShrink: 0 }}>
+              {pkLoading ? <Loader2 size={13} className="spin-icon" /> : <Fingerprint size={13} />}
+              Tambah Passkey
+            </button>
+          </div>
+          {pkError && (
+            <p className="font-mono" style={{ color: "#ff8080", fontSize: 11, marginTop: 6 }}>{pkError}</p>
+          )}
+        </div>
 
         <p className="field-hint font-mono" style={{ marginTop: 12 }}>
           Catatan: eksekusi tugas 24/7 berjalan di server n8n (Cron trigger). Tab ini hanya pusat kendali & percakapan.
@@ -1038,7 +1280,7 @@ function RenameAgentModal({ body, onClose, onRename, voices }: RenameAgentModalP
     if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
     try {
       window.speechSynthesis.cancel();
-      const utter = new SpeechSynthesisUtterance(`Halo, saya ${name || body.name}.`);
+      const utter = new SpeechSynthesisUtterance(`Halo, saya ${name || body?.name}.`);
       utter.lang = "id-ID";
       utter.rate = voiceRate;
       utter.pitch = voicePitch;
@@ -1615,6 +1857,10 @@ export default function ArtechOrchestrator() {
         .core-arms-2{ inset:-100%; animation: spin 45s linear infinite reverse; opacity:0.7; }
         .star-btn{ overflow:visible; }
         .star-corona{ position:absolute; inset:-40%; border-radius:50%; pointer-events:none; opacity:0.6; }
+        /* Lapisan tekstur hologram (wireframe + partikel) — berputar sendiri (rotasi aksial),
+           terpisah dari rotasi orbit sehingga planet terlihat "hidup" berputar terus-menerus. */
+        .planet-core-spin{ position:absolute; inset:0; border-radius:50%; pointer-events:none; mix-blend-mode:screen; }
+        .planet-hologram{ position:absolute; inset:0; width:100%; height:100%; border-radius:50%; display:block; }
         .sub-system{ position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); pointer-events:none; }
         .sub-orbit-ring{ position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); border-radius:50%; border:1px solid rgba(255,255,255,0.05); }
         .sub-orbit-spin{ position:absolute; inset:0; }
@@ -1636,6 +1882,13 @@ export default function ArtechOrchestrator() {
         @keyframes aura-ping{ 0%{ transform:scale(1); opacity:0.85; } 100%{ transform:scale(2.6); opacity:0; } }
         @keyframes aura-rot{ to{ transform:rotate(360deg); } }
         @keyframes aura-breath{ 0%,100%{ opacity:0.3; transform:scale(0.9); } 50%{ opacity:0.65; transform:scale(1.15); } }
+
+        /* KEMBANG-KEMPIS — planet "bernapas" (membesar-mengecil berulang) selagi
+           agent sedang berinteraksi/berbicara dengan user. */
+        @keyframes planet-breathe{ 0%,100%{ transform:scale(2.05); filter:brightness(1); } 50%{ transform:scale(2.38); filter:brightness(1.3); } }
+        .planet-speaking{ animation: planet-breathe 1.1s ease-in-out infinite; }
+        @keyframes core-breathe{ 0%,100%{ transform:translate(-50%,-50%) scale(1); filter:brightness(1); } 50%{ transform:translate(-50%,-50%) scale(1.14); filter:brightness(1.3); } }
+        .core-speaking{ animation: pulse-slow 4s ease-in-out infinite, core-breathe 1.1s ease-in-out infinite; }
 
         .glass-panel{ background:linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.015)); border:1px solid rgba(255,255,255,0.09); backdrop-filter: blur(16px); }
 

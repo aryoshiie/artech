@@ -35,7 +35,7 @@ export async function GET() {
           suggestions.push("Database terhubung tapi kosong. Jalankan seed: `bun run db:push && bun run db:seed` dari local, atau via Vercel CLI.");
         }
       } catch (e: any) {
-        dbError = e?.message || String(e);
+        dbError = String(e?.message || e);
         if (dbError.includes("prepared statement")) {
           suggestions.push("Error 'prepared statement already exists' — tambahkan ?pgbouncer=true&connection_limit=1 di akhir DATABASE_URL (pakai pooler port 6543, bukan 5432).");
         } else if (dbError.includes("authentication failed") || dbError.includes("password")) {

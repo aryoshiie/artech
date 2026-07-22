@@ -14,8 +14,8 @@ export default function DownloadPage() {
     setTimeout(() => setCopied(false), 2000);
   }
 
-  const fileSize = "264 KB";
-  const fileCount = "102 file";
+  const fileSize = "149 KB";
+  const fileCount = "144 file";
 
   return (
     <div style={{

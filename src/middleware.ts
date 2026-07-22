@@ -11,6 +11,7 @@ const PUBLIC_PATHS = [
   "/api/debug",
   "/api/auth/status",
   "/artech-deploy.zip",
+  "/setup-database.sql",
 ];
 
 const STATIC_PREFIXES = [

@@ -74,7 +74,8 @@ export default function LoginPage() {
         const err = await optsRes.json();
         throw new Error(err.error || "Gagal memulai autentikasi passkey");
       }
-      const opts = await optsRes.json();
+      const optsData = await optsRes.json();
+      const opts = optsData.options || optsData;
 
       // Step 2: Browser prompt biometric
       const asseResp = await startAuthentication({ optionsJSON: opts });
