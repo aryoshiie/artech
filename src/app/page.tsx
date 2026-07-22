@@ -373,74 +373,200 @@ function selfSpinSeconds(id: string, min = 9, max = 21): number {
   return min + (h % (max - min));
 }
 
-function PlanetHologram({ seed, color, glow }: { seed: string; color: string; glow: string }) {
-  const tex = useMemo(() => {
-    const rnd = seededRandom(seed);
-    // Garis lintang — ellipse pipih mengikuti kelengkungan bola dilihat dari depan
-    const lats = Array.from({ length: 6 }).map((_, i) => ({
-      ry: 5 + i * 8 + rnd() * 2.5,
-      op: 0.22 + rnd() * 0.28,
-    }));
-    // Garis bujur — ellipse tegak yang diputar mengelilingi pusat
-    const lons = Array.from({ length: 6 }).map((_, i) => ({
-      rot: i * 30 + rnd() * 10,
-      op: 0.16 + rnd() * 0.22,
-    }));
-    // "Jejak sirkuit/peta kota" — kotak-kotak kecil bersudut siku, khas tampilan holografik
-    const traces = Array.from({ length: 10 }).map(() => ({
-      x: 14 + rnd() * 68,
-      y: 14 + rnd() * 68,
-      w: 3 + rnd() * 9,
-      h: 3 + rnd() * 9,
-      op: 0.25 + rnd() * 0.35,
-    }));
-    // Titik cahaya kecil (seperti lampu kota / node data)
-    const dots = Array.from({ length: 26 }).map(() => ({
-      cx: 6 + rnd() * 88,
-      cy: 6 + rnd() * 88,
-      r: 0.5 + rnd() * 1.1,
-      op: 0.35 + rnd() * 0.55,
-    }));
-    return { lats, lons, traces, dots };
-  }, [seed]);
+/* ARC REACTOR PLANET — visualisasi partikel holografik ala Jarvis/Arc Reactor.
+ * 5 lapisan: core dust, inner glow ring, wavy band, outer halo, ambient dust.
+ * Animasi: rotasi per-lapis + gelombang sinusoidal pada band utama.
+ * Nama agent ditampilkan dinamis di pusat (mengikuti nama agent).
+ * Warna mengikuti agent.color / agent.glow (bisa diubah via color slider).
+ */
+function ArcReactorPlanet({ seed, color, glow, name, speaking }: { seed: string; color: string; glow: string; name: string; speaking?: boolean }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const nameRef = useRef<HTMLDivElement>(null);
 
-  const gid = `pg-${seed}`;
-  const cid = `pc-${seed}`;
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const rnd = seededRandom(seed);
+
+    // Pre-generate particle layers (deterministic per seed)
+    // Layer 1: core dust — padat di pusat
+    const coreDust = Array.from({ length: 70 }).map(() => ({
+      angle: rnd() * Math.PI * 2,
+      radius: rnd() * 11,
+      size: 0.4 + rnd() * 0.7,
+      speed: 0.2 + rnd() * 0.4,
+      op: 0.45 + rnd() * 0.5,
+    }));
+    // Layer 2: inner glow ring — band ketat
+    const innerRing = Array.from({ length: 54 }).map(() => ({
+      angle: rnd() * Math.PI * 2,
+      radius: 17 + rnd() * 3,
+      size: 0.6 + rnd() * 0.7,
+      op: 0.5 + rnd() * 0.4,
+    }));
+    // Layer 3: main wavy band — band tebal berosilasi (fitur utama Arc Reactor)
+    const waveBand = Array.from({ length: 150 }).map(() => ({
+      angle: rnd() * Math.PI * 2,
+      baseRadius: 27 + rnd() * 8,
+      waveAmp: 2 + rnd() * 4,
+      waveFreq: 3 + Math.floor(rnd() * 4),
+      wavePhase: rnd() * Math.PI * 2,
+      size: 0.5 + rnd() * 0.9,
+      op: 0.4 + rnd() * 0.5,
+    }));
+    // Layer 4: outer halo — sparse
+    const outerHalo = Array.from({ length: 90 }).map(() => ({
+      angle: rnd() * Math.PI * 2,
+      radius: 41 + rnd() * 5,
+      size: 0.4 + rnd() * 0.5,
+      op: 0.2 + rnd() * 0.35,
+      speed: 0.1 + rnd() * 0.2,
+    }));
+    // Layer 5: ambient dust — sangat sparse di tepi
+    const ambient = Array.from({ length: 26 }).map(() => ({
+      angle: rnd() * Math.PI * 2,
+      radius: 46 + rnd() * 2.5,
+      size: 0.3 + rnd() * 0.4,
+      op: 0.15 + rnd() * 0.2,
+    }));
+    // Titik terang berkedip (sparkle)
+    const sparkles = Array.from({ length: 8 }).map(() => ({
+      angle: rnd() * Math.PI * 2,
+      radius: 20 + rnd() * 22,
+      size: 1.2 + rnd() * 1.0,
+      op: 0.6 + rnd() * 0.4,
+      phase: rnd() * Math.PI * 2,
+      speed: 1.5 + rnd() * 2,
+    }));
+
+    let raf = 0;
+    let t0 = performance.now();
+
+    function resize() {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const rect = canvas.getBoundingClientRect();
+      const size = Math.max(1, Math.min(rect.width, rect.height));
+      canvas.width = Math.round(size * dpr);
+      canvas.height = Math.round(size * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    resize();
+    const ro = new ResizeObserver(resize);
+    ro.observe(canvas);
+
+    function draw(now: number) {
+      const rect = canvas.getBoundingClientRect();
+      const w = rect.width, h = rect.height;
+      if (w < 1 || h < 1) { raf = requestAnimationFrame(draw); return; }
+      const cx = w / 2, cy = h / 2;
+      const scale = Math.max(0.5, Math.min(w, h) / 100);
+      const time = (now - t0) * 0.001;
+
+      ctx.clearRect(0, 0, w, h);
+      ctx.globalCompositeOperation = "lighter"; // additive blending → glow intens
+
+      const drawParticle = (x: number, y: number, sz: number, col: string, op: number) => {
+        const r = Math.max(0.15, sz * scale);
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fillStyle = col;
+        ctx.globalAlpha = op;
+        ctx.shadowBlur = r * 3;
+        ctx.shadowColor = col;
+        ctx.fill();
+      };
+
+      // Layer 1: core dust (rotasi lambat searah jarum jam)
+      const coreRot = time * 0.3;
+      for (const p of coreDust) {
+        const a = p.angle + coreRot * p.speed;
+        const r = p.radius * scale;
+        drawParticle(cx + Math.cos(a) * r, cy + Math.sin(a) * r, p.size, glow, p.op);
+      }
+
+      // Layer 2: inner glow ring (rotasi berlawanan)
+      const innerRot = -time * 0.4;
+      for (const p of innerRing) {
+        const a = p.angle + innerRot;
+        const r = p.radius * scale;
+        drawParticle(cx + Math.cos(a) * r, cy + Math.sin(a) * r, p.size, glow, p.op);
+      }
+
+      // Layer 3: main wavy band (fitur utama — gelombang sinusoidal)
+      const waveRot = time * 0.25;
+      for (const p of waveBand) {
+        const a = p.angle + waveRot;
+        const r = (p.baseRadius + p.waveAmp * Math.sin(a * p.waveFreq + p.wavePhase + time * 2)) * scale;
+        drawParticle(cx + Math.cos(a) * r, cy + Math.sin(a) * r, p.size, color, p.op);
+      }
+
+      // Layer 4: outer halo (sangat lambat)
+      const haloRot = time * 0.15;
+      for (const p of outerHalo) {
+        const a = p.angle + haloRot * p.speed;
+        const r = p.radius * scale;
+        drawParticle(cx + Math.cos(a) * r, cy + Math.sin(a) * r, p.size, color, p.op * 0.7);
+      }
+
+      // Layer 5: ambient dust
+      for (const p of ambient) {
+        const a = p.angle + time * 0.1;
+        const r = p.radius * scale;
+        drawParticle(cx + Math.cos(a) * r, cy + Math.sin(a) * r, p.size, glow, p.op);
+      }
+
+      // Sparkles (titik terang berkedip)
+      for (const p of sparkles) {
+        const a = p.angle + time * 0.2;
+        const r = p.radius * scale;
+        const flicker = 0.5 + 0.5 * Math.sin(time * p.speed + p.phase);
+        drawParticle(cx + Math.cos(a) * r, cy + Math.sin(a) * r, p.size, glow, p.op * flicker);
+      }
+
+      ctx.globalCompositeOperation = "source-over";
+      ctx.globalAlpha = 1;
+      ctx.shadowBlur = 0;
+
+      raf = requestAnimationFrame(draw);
+    }
+
+    raf = requestAnimationFrame(draw);
+    return () => {
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+    };
+  }, [seed, color, glow]);
+
+  // Pisah nama jadi baris-baris agar muat di lingkaran (max 2-3 baris)
+  const nameWords = (name || "").trim().split(/\s+/);
+  const nameLines: string[] = [];
+  if (nameWords.length === 1) {
+    nameLines.push(nameWords[0]);
+  } else if (nameWords.length === 2) {
+    nameLines.push(nameWords[0], nameWords[1]);
+  } else {
+    // gabungkan menjadi 2 baris
+    const mid = Math.ceil(nameWords.length / 2);
+    nameLines.push(nameWords.slice(0, mid).join(" "), nameWords.slice(mid).join(" "));
+  }
 
   return (
-    <svg viewBox="0 0 100 100" className="planet-hologram" aria-hidden="true">
-      <defs>
-        <radialGradient id={gid} cx="35%" cy="32%" r="75%">
-          <stop offset="0%" stopColor={glow} stopOpacity="0.95" />
-          <stop offset="55%" stopColor={color} stopOpacity="0.6" />
-          <stop offset="100%" stopColor={color} stopOpacity="0.12" />
-        </radialGradient>
-        <clipPath id={cid}>
-          <circle cx="50" cy="50" r="49" />
-        </clipPath>
-      </defs>
-      <circle cx="50" cy="50" r="49" fill={`url(#${gid})`} />
-      <g clipPath={`url(#${cid})`}>
-        {tex.lats.map((l, i) => (
-          <ellipse key={"lat" + i} cx="50" cy="50" rx="48" ry={l.ry} fill="none" stroke={color} strokeWidth="0.55" opacity={l.op} />
+    <div className="arc-reactor-planet" aria-hidden="true">
+      <canvas ref={canvasRef} className="arc-reactor-canvas" />
+      {/* Cincin tipis statis untuk border hologram */}
+      <span className="arc-reactor-ring" style={{ borderColor: `${color}55` }} />
+      {/* Nama agent dinamis di pusat */}
+      <div ref={nameRef} className="arc-reactor-name font-display" style={{ color: glow, textShadow: `0 0 4px #05060d, 0 0 8px #05060d, 0 0 6px ${color}, 0 0 14px ${color}99` }}>
+        <span className="arc-reactor-name-backdrop" style={{ background: `radial-gradient(circle, #05060dcc 30%, transparent 70%)` }} />
+        {nameLines.map((ln, i) => (
+          <span key={i} className="arc-reactor-name-line">{ln}</span>
         ))}
-        {tex.lons.map((l, i) => (
-          <ellipse
-            key={"lon" + i}
-            cx="50" cy="50" rx="13" ry="48"
-            fill="none" stroke={color} strokeWidth="0.5" opacity={l.op}
-            transform={`rotate(${l.rot} 50 50)`}
-          />
-        ))}
-        {tex.traces.map((t, i) => (
-          <rect key={"tr" + i} x={t.x} y={t.y} width={t.w} height={t.h} rx="0.6" fill="none" stroke={glow} strokeWidth="0.5" opacity={t.op} />
-        ))}
-        {tex.dots.map((d, i) => (
-          <circle key={"dot" + i} cx={d.cx} cy={d.cy} r={d.r} fill={glow} opacity={d.op} />
-        ))}
-      </g>
-      <circle cx="50" cy="50" r="49" fill="none" stroke={color} strokeWidth="1" opacity="0.55" />
-    </svg>
+      </div>
+      {speaking && <span className="arc-reactor-pulse" style={{ borderColor: `${glow}88` }} />}
+    </div>
   );
 }
 
@@ -481,15 +607,13 @@ function OrbitView({ agents, coreMeta, speakingId, selectedId, zoomedId, drawerA
         title={`${coreMeta.name} · ${coreMeta.role}`}
         style={{
           width: "14vmin", height: "14vmin",
-          background: `radial-gradient(circle at 38% 34%, ${coreMeta.glow}, ${coreMeta.color} 55%, #ff9d3c 100%)`,
+          background: `radial-gradient(circle at 50% 50%, ${coreMeta.glow}55 0%, ${coreMeta.color}22 35%, #05060d 80%)`,
           boxShadow: selectedId === coreMeta.id || coreSpeaking
-            ? `0 0 6vmin 2vmin ${coreMeta.color}88, 0 0 14vmin 5vmin ${coreMeta.color}33`
-            : `0 0 5vmin 1.5vmin ${coreMeta.color}66, 0 0 12vmin 4vmin ${coreMeta.color}22`,
+            ? `0 0 6vmin 2vmin ${coreMeta.color}88, 0 0 14vmin 5vmin ${coreMeta.color}33, inset 0 0 3vmin ${coreMeta.color}44`
+            : `0 0 5vmin 1.5vmin ${coreMeta.color}66, 0 0 12vmin 4vmin ${coreMeta.color}22, inset 0 0 2vmin ${coreMeta.color}2a`,
         }}
       >
-        <span className="planet-core-spin" style={{ animation: `spin ${selfSpinSeconds(coreMeta.id, 14, 26)}s linear infinite` }}>
-          <PlanetHologram seed={coreMeta.id} color={coreMeta.color} glow={coreMeta.glow} />
-        </span>
+        <ArcReactorPlanet seed={coreMeta.id} color={coreMeta.color} glow={coreMeta.glow} name={coreMeta.name} speaking={coreSpeaking} />
         <span className="core-arms" style={{ background: `conic-gradient(from 0deg, transparent 0deg, ${coreMeta.color}22 25deg, transparent 55deg, transparent 180deg, ${coreMeta.color}22 205deg, transparent 235deg)` }} />
         <span className="core-arms core-arms-2" style={{ background: `conic-gradient(from 90deg, transparent 0deg, ${coreMeta.glow}18 30deg, transparent 60deg, transparent 180deg, ${coreMeta.glow}18 210deg, transparent 240deg)` }} />
         {coreSpeaking && <SpeakingAura body={coreMeta} />}
@@ -514,26 +638,23 @@ function OrbitView({ agents, coreMeta, speakingId, selectedId, zoomedId, drawerA
       )}
 
       {/* STAR SYSTEMS — setiap agent = bintang dengan toggle popup */}
-      {agents.map((agent) => {
+      {agents.map((agent, idx) => {
         const speaking = speakingId === agent.id;
         const isSel = selectedId === agent.id;
         const isZoomed = zoomedId === agent.id;
         const isDrawer = drawerAgentId === agent.id;
+        // Sudut statis per agent — planet distribusi di orbit tanpa revolusi
+        const staticAngle = selfSpinSeconds(agent.id, 0, 360);
         return (
-          <div key={agent.id} className="orbit-ring" style={{ width: `${agent.orbit * 2}vmin`, height: `${agent.orbit * 2}vmin` }}>
-            <div
-              className="orbit-spin"
-              style={{
-                animation: `spin ${agent.duration}s linear infinite`,
-                animationPlayState: isZoomed || isDrawer ? "paused" : "running",
-              }}
-            >
+          <div key={agent.id} className="orbit-ring" style={{
+            width: `${agent.orbit * 2}vmin`,
+            height: `${agent.orbit * 2}vmin`,
+            transform: `translate(-50%, -50%) rotate(${staticAngle}deg)`,
+          }}>
+            <div className="orbit-spin">
               <div
                 className="planet-anchor"
-                style={{
-                  animation: `spin-reverse ${agent.duration}s linear infinite`,
-                  animationPlayState: isZoomed || isDrawer ? "paused" : "running",
-                }}
+                style={{ transform: `translate(-50%, -50%) rotate(${-staticAngle}deg)` }}
               >
                 <button
                   className={`planet-btn star-btn${speaking ? " planet-speaking" : ""}`}
@@ -544,35 +665,35 @@ function OrbitView({ agents, coreMeta, speakingId, selectedId, zoomedId, drawerA
                     height: `${agent.size}vmin`,
                     transform: speaking ? undefined : (isZoomed ? "scale(2.2)" : (isDrawer ? "scale(1.5)" : "scale(1)")),
                     zIndex: (isZoomed || speaking) ? 20 : (isSel ? 10 : 1),
-                    background: `radial-gradient(circle at 35% 32%, ${agent.glow}, ${agent.color} 70%)`,
+                    background: `radial-gradient(circle at 50% 50%, ${agent.color}33 0%, ${agent.color}11 40%, #05060d 78%)`,
                     boxShadow: speaking
-                      ? `0 0 4vmin 1.5vmin ${agent.glow}, 0 0 10vmin 3vmin ${agent.color}55`
+                      ? `0 0 4vmin 1.5vmin ${agent.glow}, 0 0 10vmin 3vmin ${agent.color}55, inset 0 0 2vmin ${agent.color}33`
                       : isDrawer
-                      ? `0 0 2.5vmin 0.8vmin ${agent.glow}cc`
+                      ? `0 0 2.5vmin 0.8vmin ${agent.glow}cc, inset 0 0 1.5vmin ${agent.color}22`
                       : isSel
-                      ? `0 0 1.6vmin 0.4vmin ${agent.glow}aa`
-                      : `0 0 0.8vmin 0.1vmin ${agent.color}66`,
+                      ? `0 0 1.6vmin 0.4vmin ${agent.glow}aa, inset 0 0 1vmin ${agent.color}1a`
+                      : `0 0 0.8vmin 0.1vmin ${agent.color}66, inset 0 0 0.6vmin ${agent.color}14`,
                     transition: "transform .6s cubic-bezier(0.34,1.56,0.64,1), box-shadow .3s ease",
                   }}
                 >
-                  <span
-                    className="planet-core-spin"
-                    style={{
-                      animation: `spin ${selfSpinSeconds(agent.id)}s linear infinite`,
-                      animationPlayState: isZoomed || isDrawer ? "paused" : "running",
-                    }}
-                  >
-                    <PlanetHologram seed={agent.id} color={agent.color} glow={agent.glow} />
-                  </span>
+                  <ArcReactorPlanet seed={agent.id} color={agent.color} glow={agent.glow} name={agent.name} speaking={speaking} />
                   <span className="star-corona" style={{ background: `radial-gradient(circle, ${agent.glow}33, transparent 70%)` }} />
                   <span className="sub-system">
-                    {(agent.tools || []).map((sub, si) => (
-                      <span key={si} className="sub-orbit-ring" style={{ width: `${sub.orbit * 2}vmin`, height: `${sub.orbit * 2}vmin` }}>
-                        <span className="sub-orbit-spin" style={{ animation: `spin ${sub.duration}s linear infinite` }}>
-                          <span className="sub-planet" style={{ width: `${sub.size}vmin`, height: `${sub.size}vmin`, background: sub.color, boxShadow: `0 0 0.4vmin ${sub.color}` }} />
+                    {(agent.tools || []).map((sub, si) => {
+                      const toolsCount = (agent.tools || []).length;
+                      const subAngle = toolsCount > 1 ? (si * 360 / toolsCount) : 0;
+                      return (
+                        <span key={si} className="sub-orbit-ring" style={{
+                          width: `${sub.orbit * 2}vmin`,
+                          height: `${sub.orbit * 2}vmin`,
+                          transform: `translate(-50%, -50%) rotate(${subAngle}deg)`,
+                        }}>
+                          <span className="sub-orbit-spin">
+                            <span className="sub-planet" style={{ width: `${sub.size}vmin`, height: `${sub.size}vmin`, background: sub.color, boxShadow: `0 0 0.4vmin ${sub.color}` }} />
+                          </span>
                         </span>
-                      </span>
-                    ))}
+                      );
+                    })}
                   </span>
                   {speaking && <SpeakingAura body={agent} />}
                   {agent.ring && (
@@ -1244,6 +1365,46 @@ function AddAgentModal({ onClose, onAdd }: AddAgentModalProps) {
 /*  RENAME AGENT MODAL                                                 */
 /* ------------------------------------------------------------------ */
 
+/* ---- Color helpers: HSL ↔ HEX untuk color slider per-agent ---- */
+function hexToHsl(hex: string): { h: number; s: number; l: number } {
+  let r = 0, g = 0, b = 0;
+  const m = hex.replace("#", "");
+  if (m.length === 3) {
+    r = parseInt(m[0] + m[0], 16); g = parseInt(m[1] + m[1], 16); b = parseInt(m[2] + m[2], 16);
+  } else if (m.length === 6) {
+    r = parseInt(m.slice(0, 2), 16); g = parseInt(m.slice(2, 4), 16); b = parseInt(m.slice(4, 6), 16);
+  }
+  r /= 255; g /= 255; b /= 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  let h = 0, s = 0; const l = (max + min) / 2;
+  if (max !== min) {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    switch (max) {
+      case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+      case g: h = (b - r) / d + 2; break;
+      case b: h = (r - g) / d + 4; break;
+    }
+    h *= 60;
+  }
+  return { h: Math.round(h), s: Math.round(s * 100), l: Math.round(l * 100) };
+}
+
+function hslToHex(h: number, s: number, l: number): string {
+  s /= 100; l /= 100;
+  const k = (n: number) => (n + h / 30) % 12;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n: number) => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+  const toHex = (x: number) => Math.round(x * 255).toString(16).padStart(2, "0");
+  return `#${toHex(f(0))}${toHex(f(8))}${toHex(f(4))}`;
+}
+
+/* Hasilkan warna glow (lebih terang) dari color utama — dipakai sebagai halo agent */
+function deriveGlow(color: string): string {
+  const { h, s, l } = hexToHsl(color);
+  return hslToHex(h, Math.min(100, s + 10), Math.min(90, l + 25));
+}
+
 interface RenameAgentModalProps {
   body: Agent | null;
   onClose: () => void;
@@ -1251,6 +1412,9 @@ interface RenameAgentModalProps {
     name: string;
     role: string;
     desc: string;
+    color: string;
+    glow: string;
+    webhookUrl?: string | null;
     voicePitch?: number;
     voiceRate?: number;
     voiceGender?: string;
@@ -1263,11 +1427,27 @@ function RenameAgentModal({ body, onClose, onRename, voices }: RenameAgentModalP
   const [name, setName] = useState(body ? body.name : "");
   const [role, setRole] = useState(body ? body.role : "");
   const [desc, setDesc] = useState(body ? body.desc : "");
+  const [color, setColor] = useState(body?.color || "#5eead4");
+  const [glow, setGlow] = useState(body?.glow || deriveGlow(body?.color || "#5eead4"));
+  const [hue, setHue] = useState<number>(() => hexToHsl(body?.color || "#5eead4").h);
+  const [sat, setSat] = useState<number>(() => hexToHsl(body?.color || "#5eead4").s);
+  const [lit, setLit] = useState<number>(() => hexToHsl(body?.color || "#5eead4").l);
   const [voicePitch, setVoicePitch] = useState(body?.voicePitch ?? 1);
   const [voiceRate, setVoiceRate] = useState(body?.voiceRate ?? 1);
   const [voiceGender, setVoiceGender] = useState<string>(body?.voiceGender || "neutral");
   const [voiceName, setVoiceName] = useState<string>(body?.voiceName || "");
+  const [webhookUrl, setWebhookUrl] = useState<string>(body?.webhookUrl || "");
   const [testing, setTesting] = useState(false);
+
+  // Sinkronisasi slider HSL → color & glow
+  const applyHsl = useCallback((h: number, s: number, l: number) => {
+    const newColor = hslToHex(h, s, l);
+    const newGlow = hslToHex(h, Math.min(100, s + 10), Math.min(90, l + 25));
+    setColor(newColor); setGlow(newGlow);
+  }, []);
+  const onHue = (v: number) => { setHue(v); applyHsl(v, sat, lit); };
+  const onSat = (v: number) => { setSat(v); applyHsl(hue, v, lit); };
+  const onLit = (v: number) => { setLit(v); applyHsl(hue, sat, v); };
 
   if (!body) return null;
 
@@ -1314,6 +1494,106 @@ function RenameAgentModal({ body, onClose, onRename, voices }: RenameAgentModalP
         <input className="text-input font-mono" value={role} onChange={(e) => setRole(e.target.value)} />
         <label className="field-label font-mono">Deskripsi</label>
         <textarea className="text-input font-mono" value={desc} onChange={(e) => setDesc(e.target.value)} rows={2} style={{ resize: "vertical", fontFamily: "inherit" }} />
+
+        {/* ===== COLOR SECTION — slider warna per-agent ===== */}
+        <div className="color-section">
+          <div className="color-section-title font-display">
+            <span className="color-preview-dot" style={{ background: color, boxShadow: `0 0 10px ${color}, 0 0 20px ${glow}88` }} />
+            Warna Agent
+          </div>
+          <div className="color-preview-row">
+            <div className="color-swatch" style={{ background: `linear-gradient(135deg, ${glow}, ${color})`, boxShadow: `0 0 16px ${color}66` }} />
+            <div className="font-mono color-hex">{color.toUpperCase()} <span style={{ color: "var(--dust)", marginLeft: 8 }}>{glow.toUpperCase()}</span></div>
+          </div>
+
+          <label className="field-label font-mono">Hue (Rona) — {hue}°</label>
+          <input
+            type="range" min="0" max="360" step="1"
+            value={hue}
+            onChange={(e) => onHue(Number(e.target.value))}
+            className="color-slider hue-slider"
+            style={{ background: "linear-gradient(to right, #ff0000, #ffff00, #00ff00, #00ffff, #0000ff, #ff00ff, #ff0000)" }}
+          />
+          <div className="range-labels font-mono"><span>0°</span><span>360°</span></div>
+
+          <label className="field-label font-mono">Saturasi (Ketajaman) — {sat}%</label>
+          <input
+            type="range" min="0" max="100" step="1"
+            value={sat}
+            onChange={(e) => onSat(Number(e.target.value))}
+            className="color-slider"
+          />
+          <div className="range-labels font-mono"><span>Pudar</span><span>Vivid</span></div>
+
+          <label className="field-label font-mono">Lightness (Kecerahan) — {lit}%</label>
+          <input
+            type="range" min="10" max="80" step="1"
+            value={lit}
+            onChange={(e) => onLit(Number(e.target.value))}
+            className="color-slider"
+          />
+          <div className="range-labels font-mono"><span>Gelap</span><span>Terang</span></div>
+
+          {/* Preset warna cepat */}
+          <label className="field-label font-mono">Preset Cepat</label>
+          <div className="color-presets">
+            {[
+              { name: "Cyan", c: "#5eead4" },
+              { name: "Orange", c: "#ffb454" },
+              { name: "Mercury", c: "#ad9c8e" },
+              { name: "Venus", c: "#e8c99b" },
+              { name: "Bumi", c: "#3f7fd1" },
+              { name: "Mars", c: "#c1440e" },
+              { name: "Jupiter", c: "#d9a066" },
+              { name: "Saturn", c: "#e3c88f" },
+              { name: "Uranus", c: "#9fe0e0" },
+              { name: "Neptune", c: "#3f5efb" },
+              { name: "Magenta", c: "#ff4fd8" },
+              { name: "Lime", c: "#a3e635" },
+            ].map((p) => (
+              <button
+                key={p.c}
+                type="button"
+                className="color-preset-btn"
+                title={p.name}
+                onClick={() => {
+                  const hsl = hexToHsl(p.c);
+                  setHue(hsl.h); setSat(hsl.s); setLit(hsl.l);
+                  setColor(p.c); setGlow(deriveGlow(p.c));
+                }}
+                style={{ background: p.c, boxShadow: color.toLowerCase() === p.c.toLowerCase() ? `0 0 0 2px var(--starlight), 0 0 8px ${p.c}` : `0 0 6px ${p.c}88` }}
+              />
+            ))}
+          </div>
+          <p className="field-hint font-mono">Glow (halo) otomatis dihasilkan dari warna utama. Tiap agent bisa punya warna berbeda.</p>
+        </div>
+        {/* ===== END COLOR SECTION ===== */}
+
+        {/* ===== N8N WEBHOOK SECTION — connect ke workflow n8n per agent ===== */}
+        <div className="color-section">
+          <div className="color-section-title font-display">
+            <span className="color-preview-dot" style={{ background: webhookUrl ? "#5eead4" : "#8683a1", boxShadow: webhookUrl ? `0 0 10px #5eead4` : "none" }} />
+            Koneksi n8n Workflow
+          </div>
+          <label className="field-label font-mono">Webhook URL (opsional — kosongkan untuk pakai LLM fallback)</label>
+          <input
+            className="text-input font-mono"
+            value={webhookUrl}
+            onChange={(e) => setWebhookUrl(e.target.value)}
+            placeholder={`https://your-n8n.com/webhook/agent-${body?.id || "xxx"}`}
+            style={{ fontSize: 11 }}
+          />
+          <p className="field-hint font-mono">
+            {webhookUrl
+              ? "✅ Mode n8n: pesan akan dikirim ke webhook ini. Workflow n8n Anda akan memproses & membalas."
+              : "ℹ️ Mode LLM fallback: agent merespons via AI bawaan (z-ai-web-dev-sdk). Set webhook URL untuk connect ke workflow n8n Anda."}
+          </p>
+          <p className="field-hint font-mono" style={{ marginTop: 6, color: "#5eead4" }}>
+            Pattern disarankan: <code>{`{n8n-base-url}/webhook/agent-{agentId}`}</code><br/>
+            Contoh: <code>https://n8n.domain.com/webhook/agent-venus</code>
+          </p>
+        </div>
+        {/* ===== END N8N WEBHOOK SECTION ===== */}
 
         {/* ===== VOICE SETTINGS SECTION ===== */}
         <div className="voice-section">
@@ -1401,6 +1681,8 @@ function RenameAgentModal({ body, onClose, onRename, voices }: RenameAgentModalP
             style={{ background: "var(--ion)", borderColor: "var(--ion)", color: "#04201c" }}
             onClick={() => onRename(body.id, {
               name, role, desc,
+              color, glow,
+              webhookUrl: webhookUrl || null,
               voicePitch, voiceRate, voiceGender,
               voiceName: voiceName || null,
             })}
@@ -1427,6 +1709,135 @@ const DEFAULT_SETTINGS: AppSettings = {
   sessionIdleTimeoutMin: 30,
 };
 
+/* ------------------------------------------------------------------ */
+/*  CENTRAL REACTOR LOGO — single central logo (no solar system)       */
+/*  Ring berputar saat agent aktif (speaking), redup saat switch agent */
+/*  Nama agent aktif tampil di tengah, dinamis.                        */
+/* ------------------------------------------------------------------ */
+
+interface CentralReactorLogoProps {
+  allBodies: Agent[];
+  activeAgentId: string | null;     // agent yang sedang aktif (dari sessionInfo atau selectedId)
+  speakingId: string | null;        // agent yang sedang bicara
+  switching: boolean;                // true saat transition switch agent
+  onSelect: (id: string) => void;
+  onToggleChat: (id: string) => void;
+  coreMeta: Agent;
+}
+
+function CentralReactorLogo({ allBodies, activeAgentId, speakingId, switching, onSelect, onToggleChat, coreMeta }: CentralReactorLogoProps) {
+  // Agent yang sedang aktif = activeAgentId || coreMeta (default ke Inti Galaksi)
+  const currentId = activeAgentId || coreMeta.id;
+  const current = allBodies.find((a) => a.id === currentId) || coreMeta;
+  const isSpeaking = speakingId === current.id;
+  // State: "active" (ring berputar cepat), "switching" (redup, ring melambat), "idle" (ring berputar lambat)
+  const ringState = switching ? "switching" : (isSpeaking ? "active" : "idle");
+
+  return (
+    <div className="central-reactor-stage">
+      {/* Glow ambient di belakang */}
+      <div
+        className="central-ambient-glow"
+        style={{
+          background: `radial-gradient(circle at 50% 50%, ${current.color}${switching ? "22" : isSpeaking ? "55" : "33"} 0%, ${current.color}11 40%, transparent 70%)`,
+          opacity: switching ? 0.4 : 1,
+          transition: "opacity .6s ease, background .6s ease",
+        }}
+      />
+
+      {/* Logo utama — klik untuk buka chat agent aktif */}
+      <button
+        className={`central-logo-btn ring-state-${ringState}`}
+        onClick={() => onToggleChat(current.id)}
+        title={`Chat dengan ${current.name} · ${current.role}`}
+        aria-label={`Chat dengan ${current.name}`}
+        style={{
+          // Warna ring mengikuti agent aktif
+          ["--agent-color" as any]: current.color,
+          ["--agent-glow" as any]: current.glow,
+        }}
+      >
+        {/* Lapisan ring (5 lapis) — kecepatan rotasi tergantung ringState */}
+        <span className="cr-ring cr-ring-1" />
+        <span className="cr-ring cr-ring-2" />
+        <span className="cr-ring cr-ring-3" />
+        <span className="cr-ring cr-ring-4" />
+        <span className="cr-ring cr-ring-5" />
+
+        {/* Tick marks di ring terluar (HUD style) */}
+        <span className="cr-ticks">
+          {Array.from({ length: 60 }).map((_, i) => (
+            <span
+              key={i}
+              className="cr-tick"
+              style={{ transform: `rotate(${i * 6}deg)` }}
+            />
+          ))}
+        </span>
+
+        {/* Core particle (Arc Reactor effect) — partikel tetap beranimasi */}
+        <span className="cr-core-wrap">
+          <ArcReactorPlanet
+            seed={current.id}
+            color={current.color}
+            glow={current.glow}
+            name={current.name}
+            speaking={isSpeaking}
+          />
+        </span>
+
+        {/* Pulse rings saat speaking */}
+        {isSpeaking && (
+          <>
+            <span className="cr-pulse-ring cr-pulse-1" style={{ borderColor: `${current.glow}88` }} />
+            <span className="cr-pulse-ring cr-pulse-2" style={{ borderColor: `${current.color}66` }} />
+          </>
+        )}
+
+        {/* Status label di atas logo */}
+        <span className="cr-status-label font-mono">
+          {switching ? "SWITCHING…" : isSpeaking ? "● ACTIVE" : "○ STANDBY"}
+        </span>
+
+        {/* Role label di bawah logo */}
+        <span className="cr-role-label font-mono" style={{ color: current.color }}>
+          {current.role.toUpperCase()}
+        </span>
+      </button>
+
+      {/* Agent selector — pilih agent lain (trigger switch) */}
+      <div className="central-agent-selector">
+        {allBodies.map((agent) => {
+          const isActive = agent.id === current.id;
+          return (
+            <button
+              key={agent.id}
+              className={`central-agent-chip${isActive ? " active" : ""}`}
+              onClick={() => onSelect(agent.id)}
+              title={`${agent.name} · ${agent.role}`}
+              style={{
+                background: isActive ? `${agent.color}22` : "rgba(255,255,255,0.04)",
+                borderColor: isActive ? agent.color : "rgba(255,255,255,0.1)",
+                color: isActive ? agent.glow : "#8683a1",
+                boxShadow: isActive ? `0 0 0.8vmin ${agent.color}66` : "none",
+              }}
+            >
+              <span
+                className="central-agent-dot"
+                style={{
+                  background: agent.color,
+                  boxShadow: isActive ? `0 0 0.5vmin ${agent.glow}` : "none",
+                }}
+              />
+              <span className="font-mono">{agent.name}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export default function ArtechOrchestrator() {
   const [ready, setReady] = useState(false);
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
@@ -1440,6 +1851,8 @@ export default function ArtechOrchestrator() {
   const [pendingFiles, setPendingFiles] = useState<Record<string, MessageFile[]>>({});
   const [sending, setSending] = useState<Record<string, boolean>>({});
   const [speakingId, setSpeakingId] = useState<string | null>(null);
+  const [switchingAgent, setSwitchingAgent] = useState<boolean>(false);
+  const switchingTimer = useRef<any>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [testState, setTestState] = useState<"idle" | "testing" | "ok" | "fail">("idle");
   const [rosterCollapsed, setRosterCollapsed] = useState(false);
@@ -1725,7 +2138,7 @@ export default function ArtechOrchestrator() {
 
   /* ---- rename agent (sekaligus update voice settings) ---- */
   const handleRenameAgent = useCallback(async (agentId: string, data: {
-    name: string; role: string; desc: string;
+    name: string; role: string; desc: string; color: string; glow: string; webhookUrl?: string | null;
     voicePitch?: number; voiceRate?: number; voiceGender?: string; voiceName?: string | null;
   }) => {
     try {
@@ -1735,10 +2148,12 @@ export default function ArtechOrchestrator() {
         body: JSON.stringify(data),
       });
       if (!res.ok) throw new Error("Gagal update");
-      const updated = await res.json();
+      const json = await res.json();
+      const updated = json.agent || json;
       setAgents((prev) => prev.map((a) => a.id === agentId ? { ...a, ...updated } : a));
+      setCoreMeta((prev) => prev && prev.id === agentId ? { ...prev, ...updated } : prev);
       setRenameAgentId(null);
-      showToast(`Agent diubah menjadi "${data.name}".`, "info");
+      showToast(`Agent "${data.name}" disimpan.`, "info");
     } catch (e: any) {
       showToast(`Error: ${e.message}`, "error");
     }
@@ -1753,6 +2168,12 @@ export default function ArtechOrchestrator() {
   const select = (id: string) => {
     setSelectedId(id);
     setZoomedId((z) => z === id ? null : id);
+    // Trigger switching effect: ring redup selama 700ms saat pindah agent
+    if (selectedId !== id && selectedId !== null) {
+      setSwitchingAgent(true);
+      if (switchingTimer.current) clearTimeout(switchingTimer.current);
+      switchingTimer.current = setTimeout(() => setSwitchingAgent(false), 700);
+    }
   };
 
   const selectedBody = drawerAgentId ? getBody(drawerAgentId) : null;
@@ -1982,6 +2403,331 @@ export default function ArtechOrchestrator() {
         @media (prefers-reduced-motion: reduce){
           *{ animation-duration:0.001ms !important; animation-iteration-count:1 !important; }
         }
+
+        /* ===== ARC REACTOR PLANET (Jarvis-style particle visualization) ===== */
+        .arc-reactor-planet{
+          position:absolute; inset:0; width:100%; height:100%;
+          border-radius:50%; overflow:hidden;
+          container-type:size;
+          mix-blend-mode:screen;
+        }
+        .arc-reactor-canvas{
+          position:absolute; inset:0; width:100%; height:100%;
+          display:block; border-radius:50%;
+        }
+        .arc-reactor-ring{
+          position:absolute; inset:4%; border-radius:50%;
+          border:1px solid rgba(255,255,255,0.12);
+          pointer-events:none;
+        }
+        .arc-reactor-name{
+          position:absolute; top:50%; left:50%;
+          transform:translate(-50%,-50%);
+          display:flex; flex-direction:column; align-items:center; justify-content:center;
+          gap:0.5cqw;
+          font-size:13cqw; font-weight:600;
+          letter-spacing:0.08em; text-transform:uppercase;
+          text-align:center; line-height:1;
+          pointer-events:none;
+          max-width:62%; max-height:62%;
+          z-index:2;
+        }
+        .arc-reactor-name-line{
+          display:block;
+          white-space:nowrap;
+          text-shadow:0 0 4px #05060d, 0 0 8px #05060d;
+          animation: arc-name-fade 0.4s ease;
+          position:relative; z-index:2;
+        }
+        .arc-reactor-name-backdrop{
+          position:absolute; top:50%; left:50%;
+          transform:translate(-50%,-50%);
+          width:140%; height:140%;
+          z-index:1;
+          pointer-events:none;
+          border-radius:50%;
+        }
+        @keyframes arc-name-fade{ from{ opacity:0; transform:translateY(2px);} to{ opacity:1; transform:translateY(0);} }
+        .arc-reactor-pulse{
+          position:absolute; inset:-8%; border-radius:50%;
+          border:2px solid transparent;
+          animation: arc-pulse 1.8s ease-out infinite;
+          pointer-events:none;
+        }
+        @keyframes arc-pulse{
+          0%{ transform:scale(0.85); opacity:0.9; }
+          100%{ transform:scale(1.25); opacity:0; }
+        }
+
+        /* ===== COLOR SLIDER SECTION (per-agent color picker) ===== */
+        .color-section{
+          margin-top:16px; padding:14px;
+          background:rgba(255,255,255,0.03);
+          border:1px solid rgba(255,255,255,0.08);
+          border-radius:12px;
+        }
+        .color-section-title{
+          display:flex; align-items:center; gap:10px;
+          font-size:13px; color:var(--ion);
+          margin-bottom:14px; padding-bottom:8px;
+          border-bottom:1px solid rgba(255,255,255,0.06);
+        }
+        .color-preview-dot{
+          width:18px; height:18px; border-radius:50%;
+          border:1px solid rgba(255,255,255,0.3);
+          flex-shrink:0;
+          transition: background .15s ease, box-shadow .15s ease;
+        }
+        .color-preview-row{
+          display:flex; align-items:center; gap:12px;
+          margin-bottom:8px;
+        }
+        .color-swatch{
+          width:48px; height:48px; border-radius:12px;
+          border:1px solid rgba(255,255,255,0.15);
+          flex-shrink:0;
+          transition: background .15s ease, box-shadow .15s ease;
+        }
+        .color-hex{ font-size:11px; color:var(--starlight); letter-spacing:0.05em; }
+        .color-slider{
+          width:100%; height:10px; -webkit-appearance:none; appearance:none;
+          border-radius:999px; outline:none; cursor:pointer;
+          border:1px solid rgba(255,255,255,0.1);
+          background:linear-gradient(to right, rgba(255,255,255,0.08), rgba(255,255,255,0.18));
+        }
+        .color-slider::-webkit-slider-thumb{
+          -webkit-appearance:none; appearance:none;
+          width:22px; height:22px; border-radius:50%;
+          background:var(--starlight); border:3px solid var(--void);
+          box-shadow:0 0 8px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.4);
+          cursor:grab; margin-top:-1px;
+        }
+        .color-slider::-webkit-slider-thumb:active{ cursor:grabbing; transform:scale(1.1); }
+        .color-slider::-moz-range-thumb{
+          width:22px; height:22px; border-radius:50%;
+          background:var(--starlight); border:3px solid var(--void);
+          box-shadow:0 0 8px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.4);
+          cursor:grab;
+        }
+        .hue-slider{ height:14px; }
+        .color-presets{
+          display:flex; flex-wrap:wrap; gap:8px; margin-top:4px;
+        }
+        .color-preset-btn{
+          width:26px; height:26px; border-radius:50%;
+          border:1px solid rgba(255,255,255,0.2);
+          cursor:pointer; padding:0;
+          transition: transform .15s ease, box-shadow .15s ease;
+        }
+        .color-preset-btn:hover{ transform:scale(1.18); }
+
+        /* ===== CENTRAL REACTOR LOGO (no solar system — single central logo) ===== */
+        .central-reactor-stage{
+          position:relative; width:100%; height:100%;
+          display:flex; flex-direction:column; align-items:center; justify-content:center;
+          gap:3vmin; padding:3vmin;
+        }
+        .central-ambient-glow{
+          position:absolute; top:50%; left:50%;
+          transform:translate(-50%,-50%);
+          width:80vmin; height:80vmin; border-radius:50%;
+          pointer-events:none; filter:blur(2vmin);
+          transition: opacity .6s ease;
+          z-index:0;
+        }
+
+        /* Main logo button — besar di tengah */
+        .central-logo-btn{
+          position:relative;
+          width:46vmin; height:46vmin; min-width:280px; min-height:280px;
+          border:none; cursor:pointer; background:transparent;
+          display:flex; align-items:center; justify-content:center;
+          z-index:2;
+          transition: filter .6s ease, transform .6s ease;
+        }
+        .central-logo-btn:hover{ transform:scale(1.02); }
+        .central-logo-btn:focus-visible{ outline:2px solid var(--agent-color, #5eead4); outline-offset:8px; border-radius:50%; }
+
+        /* State: switching → redup, ring melambat */
+        .ring-state-switching{ filter: brightness(0.4) saturate(0.5); }
+        .ring-state-active{ filter: brightness(1.15); }
+        .ring-state-idle{ filter: brightness(0.85); }
+
+        /* 5 lapisan ring konsentris — kecepatan rotasi tergantung state */
+        .cr-ring{
+          position:absolute; top:50%; left:50%;
+          border-radius:50%; pointer-events:none;
+          border-style:solid; border-color:transparent;
+          transition: border-color .6s ease, opacity .6s ease;
+        }
+        .cr-ring-1{
+          width:100%; height:100%;
+          border-width:0.3vmin;
+          border-top-color:var(--agent-color, #5eead4);
+          border-right-color:var(--agent-color, #5eead4);
+          border-bottom-color:transparent;
+          border-left-color:transparent;
+          opacity:0.9;
+          animation: cr-spin 8s linear infinite;
+        }
+        .cr-ring-2{
+          width:88%; height:88%;
+          border-width:0.2vmin;
+          border-top-color:transparent;
+          border-right-color:var(--agent-glow, #5eead4);
+          border-bottom-color:var(--agent-glow, #5eead4);
+          border-left-color:transparent;
+          opacity:0.7;
+          animation: cr-spin-rev 12s linear infinite;
+        }
+        .cr-ring-3{
+          width:76%; height:76%;
+          border-width:0.25vmin;
+          border-top-color:var(--agent-color, #5eead4);
+          border-right-color:transparent;
+          border-bottom-color:transparent;
+          border-left-color:var(--agent-color, #5eead4);
+          opacity:0.8;
+          animation: cr-spin 6s linear infinite;
+        }
+        .cr-ring-4{
+          width:64%; height:64%;
+          border-width:0.15vmin;
+          border-style:dashed;
+          border-color:var(--agent-glow, #5eead4);
+          opacity:0.5;
+          animation: cr-spin-rev 10s linear infinite;
+        }
+        .cr-ring-5{
+          width:52%; height:52%;
+          border-width:0.2vmin;
+          border-top-color:transparent;
+          border-right-color:transparent;
+          border-bottom-color:var(--agent-color, #5eead4);
+          border-left-color:var(--agent-color, #5eead4);
+          opacity:0.7;
+          animation: cr-spin 5s linear infinite;
+        }
+
+        /* State active (speaking) — semua ring berputar lebih cepat */
+        .ring-state-active .cr-ring-1{ animation-duration:3s; }
+        .ring-state-active .cr-ring-2{ animation-duration:4s; }
+        .ring-state-active .cr-ring-3{ animation-duration:2.5s; }
+        .ring-state-active .cr-ring-4{ animation-duration:3.5s; }
+        .ring-state-active .cr-ring-5{ animation-duration:2s; }
+        .ring-state-active .cr-ring{ opacity:1; filter:brightness(1.3); }
+
+        /* State switching — ring melambat & redup */
+        .ring-state-switching .cr-ring-1{ animation-duration:20s; }
+        .ring-state-switching .cr-ring-2{ animation-duration:24s; }
+        .ring-state-switching .cr-ring-3{ animation-duration:18s; }
+        .ring-state-switching .cr-ring-4{ animation-duration:22s; }
+        .ring-state-switching .cr-ring-5{ animation-duration:16s; }
+        .ring-state-switching .cr-ring{ opacity:0.3; }
+
+        @keyframes cr-spin{ from{ transform:translate(-50%,-50%) rotate(0deg); } to{ transform:translate(-50%,-50%) rotate(360deg); } }
+        @keyframes cr-spin-rev{ from{ transform:translate(-50%,-50%) rotate(360deg); } to{ transform:translate(-50%,-50%) rotate(0deg); } }
+
+        /* Tick marks (HUD style) di ring terluar */
+        .cr-ticks{
+          position:absolute; top:50%; left:50%;
+          width:100%; height:100%;
+          transform:translate(-50%,-50%);
+          pointer-events:none;
+          animation: cr-spin 60s linear infinite;
+        }
+        .ring-state-active .cr-ticks{ animation-duration:20s; }
+        .ring-state-switching .cr-ticks{ animation-duration:120s; opacity:0.3; }
+        .cr-tick{
+          position:absolute; top:0; left:50%;
+          width:1px; height:1.2vmin;
+          background:var(--agent-color, #5eead4);
+          opacity:0.4;
+          transform-origin:0 23vmin;
+        }
+        .cr-tick:nth-child(5n){ height:1.8vmin; opacity:0.7; }
+
+        /* Core particle wrap (Arc Reactor) */
+        .cr-core-wrap{
+          position:absolute; top:50%; left:50%;
+          width:42%; height:42%;
+          transform:translate(-50%,-50%);
+          border-radius:50%;
+          overflow:hidden;
+        }
+
+        /* Pulse rings saat speaking */
+        .cr-pulse-ring{
+          position:absolute; top:50%; left:50%;
+          width:50%; height:50%;
+          border-radius:50%;
+          border:2px solid transparent;
+          transform:translate(-50%,-50%);
+          pointer-events:none;
+          animation: cr-pulse 2s ease-out infinite;
+        }
+        .cr-pulse-2{ animation-delay:1s; }
+        @keyframes cr-pulse{
+          0%{ width:50%; height:50%; opacity:1; }
+          100%{ width:100%; height:100%; opacity:0; }
+        }
+
+        /* Status & role labels */
+        .cr-status-label{
+          position:absolute; top:-3.5vmin; left:50%;
+          transform:translateX(-50%);
+          font-size:1.6vmin; letter-spacing:0.3em;
+          color:var(--agent-glow, #5eead4);
+          opacity:0.8;
+          white-space:nowrap;
+        }
+        .cr-role-label{
+          position:absolute; bottom:-3.5vmin; left:50%;
+          transform:translateX(-50%);
+          font-size:1.4vmin; letter-spacing:0.25em;
+          opacity:0.7;
+          white-space:nowrap;
+        }
+
+        /* Agent selector chips di bawah logo */
+        .central-agent-selector{
+          position:relative; z-index:3;
+          display:flex; flex-wrap:wrap; gap:0.8vmin;
+          justify-content:center; align-items:center;
+          max-width:90vmin; padding:0 2vmin;
+        }
+        .central-agent-chip{
+          display:flex; align-items:center; gap:0.6vmin;
+          padding:0.7vmin 1.2vmin;
+          border-radius:999px;
+          border:1px solid rgba(255,255,255,0.1);
+          background:rgba(255,255,255,0.04);
+          cursor:pointer;
+          font-size:1.5vmin;
+          color:#8683a1;
+          transition: all .25s ease;
+        }
+        .central-agent-chip:hover{
+          background:rgba(255,255,255,0.08);
+          border-color:rgba(255,255,255,0.25);
+          color:#eae8f5;
+          transform:translateY(-1px);
+        }
+        .central-agent-chip.active{
+          font-weight:600;
+        }
+        .central-agent-dot{
+          width:0.9vmin; height:0.9vmin; border-radius:50%;
+          flex-shrink:0;
+          transition: box-shadow .25s ease;
+        }
+
+        @media (max-width: 768px){
+          .central-logo-btn{ width:60vmin; height:60vmin; }
+          .central-agent-chip{ font-size:2.4vmin; padding:1vmin 1.6vmin; }
+          .cr-status-label{ font-size:2.4vmin; top:-5vmin; }
+          .cr-role-label{ font-size:2.2vmin; bottom:-5vmin; }
+        }
       `}</style>
 
       <GalaxyField />
@@ -2056,15 +2802,14 @@ export default function ArtechOrchestrator() {
         />
 
         <div className="orbit-stage">
-          <OrbitView
-            agents={agents}
-            coreMeta={coreMeta}
+          <CentralReactorLogo
+            allBodies={allBodies}
+            activeAgentId={sessionInfo?.activeAgentId || selectedId}
             speakingId={speakingId}
-            selectedId={selectedId}
-            zoomedId={zoomedId}
-            drawerAgentId={drawerAgentId}
+            switching={switchingAgent}
             onSelect={select}
             onToggleChat={handleToggleChat}
+            coreMeta={coreMeta}
           />
         </div>
       </main>

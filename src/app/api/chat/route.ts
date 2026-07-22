@@ -221,7 +221,7 @@ export async function POST(req: NextRequest) {
           filesCount: attachments.length,
           mode: routing.mode,
           sessionKey,
-        } as any,
+        }),
         startedAt,
       },
     });

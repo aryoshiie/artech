@@ -1,78 +1,54 @@
-// src/lib/supabase-storage.ts — Upload file ke Supabase Storage
-// File upload (Opsi B): upload ke Supabase Storage, kirim URL ke n8n
+// src/lib/supabase-storage.ts — Supabase Storage adapter (PRODUCTION)
+import { createClient, SupabaseClient } from "@supabase/supabase-js";
 
-import { createClient } from "@supabase/supabase-js";
+const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 
-const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "";
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
-
-let _client: ReturnType<typeof createClient> | null = null;
-
-function client() {
-  if (!supabaseUrl || !supabaseKey) {
-    throw new Error("SUPABASE_URL atau SUPABASE_SERVICE_ROLE_KEY belum di-set di env");
-  }
-  if (!_client) {
-    _client = createClient(supabaseUrl, supabaseKey, {
-      auth: { persistSession: false, autoRefreshToken: false },
+let client: SupabaseClient | null = null;
+function getClient(): SupabaseClient {
+  if (!client) {
+    if (!SUPABASE_URL || !SUPABASE_KEY) {
+      throw new Error("SUPABASE_URL & SUPABASE_SERVICE_ROLE_KEY env vars required");
+    }
+    client = createClient(SUPABASE_URL, SUPABASE_KEY, {
+      auth: { persistSession: false },
     });
   }
-  return _client;
+  return client;
 }
 
 const BUCKET = "artech-uploads";
 
-/**
- * Init bucket Supabase Storage kalau belum ada.
- * Dipanggil sekali saat startup (atau pertama upload).
- */
-export async function ensureBucket(): Promise<void> {
-  try {
-    const c = client();
-    const { data, error } = await c.storage.getBucket(BUCKET);
-    if (error && error.message.includes("not found")) {
-      await c.storage.createBucket(BUCKET, { public: false, fileSizeLimit: "50MB" });
-    }
-  } catch (e) {
-    // Silent fail — bucket mungkin sudah ada
-  }
-}
-
-/**
- * Upload file ke Supabase Storage.
- *
- * @param file Buffer atau Blob
- * @param path Path lengkap di bucket, mis. "session-abc/file.txt"
- * @returns { url, path } — signed URL (50 tahun) untuk akses dari n8n
- */
 export async function uploadFile(
-  file: Blob | Buffer | ArrayBuffer,
-  path: string
+  buffer: Buffer,
+  relativePath: string
 ): Promise<{ url: string; path: string }> {
-  await ensureBucket();
-  const c = client();
+  const supabase = getClient();
+  const safePath = relativePath
+    .split("/")
+    .map((s) => s.replace(/[^a-zA-Z0-9._-]/g, "_"))
+    .join("/");
+  const uniquePath = `${Date.now()}-${safePath}`;
 
-  // Upload
-  const { error: upErr } = await c.storage.from(BUCKET).upload(path, file, {
-    upsert: true,
-    contentType: "application/octet-stream",
-  });
-  if (upErr) throw new Error(`Upload gagal: ${upErr.message}`);
+  const { data, error } = await supabase.storage
+    .from(BUCKET)
+    .upload(uniquePath, buffer, { upsert: false });
 
-  // Buat signed URL (valid 50 tahun = 18250 hari) supaya n8n bisa fetch tanpa auth
-  const { data, error: urlErr } = await c.storage.from(BUCKET).createSignedUrl(path, 60 * 60 * 24 * 365 * 50);
-  if (urlErr || !data?.signedUrl) throw new Error(`Gagal buat signed URL: ${urlErr?.message}`);
+  if (error) throw new Error(`Supabase upload failed: ${error.message}`);
 
-  return { url: data.signedUrl, path };
+  const { data: urlData } = supabase.storage
+    .from(BUCKET)
+    .getPublicUrl(uniquePath);
+
+  return { url: urlData.publicUrl, path: uniquePath };
 }
 
-/**
- * Hapus file dari Supabase Storage.
- */
-export async function deleteFile(path: string): Promise<void> {
+export async function deleteFile(filePath: string): Promise<boolean> {
   try {
-    await client().storage.from(BUCKET).remove([path]);
+    const supabase = getClient();
+    const { error } = await supabase.storage.from(BUCKET).remove([filePath]);
+    return !error;
   } catch {
-    // Silent fail
+    return false;
   }
 }
