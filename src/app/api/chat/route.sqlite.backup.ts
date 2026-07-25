@@ -139,7 +139,7 @@ export async function POST(req: NextRequest) {
         sessionId: session.id,
         role: "user",
         text: trimmedMessage || null,
-        files: savedFilesMeta ? (savedFilesMeta as any) : undefined,
+        files: savedFilesMeta ? JSON.stringify(savedFilesMeta) : null,
       },
     });
 
@@ -216,7 +216,7 @@ export async function POST(req: NextRequest) {
         agentId: targetAgentId,
         sessionId: session.id,
         status: "running",
-        input: {
+        input: JSON.stringify({
           message: trimmedMessage,
           filesCount: attachments.length,
           mode: routing.mode,
@@ -251,7 +251,7 @@ export async function POST(req: NextRequest) {
         data: {
           status: "error",
           error: n8nRes.error,
-          output: n8nRes as any,
+          output: JSON.stringify(n8nRes),
           finishedAt,
           durationMs,
         },
@@ -290,7 +290,7 @@ export async function POST(req: NextRequest) {
       where: { id: executionId },
       data: {
         status: "success",
-        output: { reply: replyText, endSession } as any,
+        output: JSON.stringify({ reply: replyText, endSession }),
         finishedAt,
         durationMs,
       },
