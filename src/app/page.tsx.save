@@ -1,4 +1,4 @@
-'use client';
+use client';
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import mammoth from "mammoth";
@@ -8,7 +8,7 @@ import {
   Settings, Send, Paperclip, X, Volume2, VolumeX, Power,
   Loader2, CheckCircle2, AlertCircle,
   Trash2, FileText, File as FileIcon, Menu, Orbit, Plus, Pencil,
-  MessageCircle, ChevronLeft, Copy, KeyRound, Fingerprint, LogOut, LogOut,
+  MessageCircle, ChevronLeft, Copy, KeyRound, Fingerprint, LogOut,
 } from "lucide-react";
 
 /* ------------------------------------------------------------------ */
@@ -3145,20 +3145,6 @@ export default function ArtechOrchestrator() {
           </button>
           <button className="icon-btn" onClick={() => setSettingsOpen(true)} title="Pengaturan" aria-label="Pengaturan">
             <Settings size={16} />
-          </button>
-          <button
-            className="icon-btn"
-            onClick={async () => {
-              if (!confirm("Logout dari dashboard?")) return;
-              try {
-                await fetch("/api/auth/logout", { method: "POST" });
-              } catch {}
-              window.location.href = "/login";
-            }}
-            title="Logout"
-            aria-label="Logout"
-          >
-            <LogOut size={16} />
           </button>
         </div>
         </div>
