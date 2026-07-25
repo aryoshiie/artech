@@ -8,7 +8,7 @@ import {
   Settings, Send, Paperclip, X, Volume2, VolumeX, Power,
   Loader2, CheckCircle2, AlertCircle,
   Trash2, FileText, File as FileIcon, Menu, Orbit, Plus, Pencil,
-  MessageCircle, ChevronLeft, Copy, KeyRound, Fingerprint, LogOut, LogOut,
+  MessageCircle, ChevronLeft, Copy, KeyRound, Fingerprint, LogOut,
 } from "lucide-react";
 
 /* ------------------------------------------------------------------ */
