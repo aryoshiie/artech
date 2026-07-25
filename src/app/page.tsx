@@ -384,9 +384,13 @@ function selfSpinSeconds(id: string, min = 9, max = 21): number {
  * Nama agent ditampilkan dinamis di pusat (mengikuti nama agent).
  * Warna mengikuti agent.color / agent.glow (bisa diubah via color slider).
  */
-function ArcReactorPlanet({ seed, color, glow, name, speaking }: { seed: string; color: string; glow: string; name: string; speaking?: boolean }) {
+/* EARTH GLOBE — visualisasi Bumi realistis pakai NASA Blue Marble image.
+ * Image: public/earth-nasa.jpg (Western Hemisphere, NASA composite)
+ * Efek: rotasi texture shifting, cloud layer, atmosphere glow, day/night.
+ */
+function EarthGlobe({ seed, color, glow, name, speaking, realTimeRotation }: { seed: string; color: string; glow: string; name: string; speaking?: boolean; realTimeRotation?: boolean }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const nameRef = useRef<HTMLDivElement>(null);
+  const imgRef = useRef<HTMLImageElement | null>(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -394,61 +398,35 @@ function ArcReactorPlanet({ seed, color, glow, name, speaking }: { seed: string;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
+    // Load NASA Earth image
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.src = "/earth-nasa.jpg";
+    imgRef.current = img;
+
     const rnd = seededRandom(seed);
 
-    // Pre-generate particle layers (deterministic per seed)
-    // Layer 1: core dust — padat di pusat
-    const coreDust = Array.from({ length: 70 }).map(() => ({
-      angle: rnd() * Math.PI * 2,
-      radius: rnd() * 11,
-      size: 0.4 + rnd() * 0.7,
-      speed: 0.2 + rnd() * 0.4,
-      op: 0.45 + rnd() * 0.5,
+    // Cloud overlay (semi-transparent, akan shift lebih lambat dari texture)
+    const clouds = Array.from({ length: 50 }).map(() => ({
+      lon: rnd() * Math.PI * 2,
+      lat: (rnd() - 0.5) * Math.PI * 0.8,
+      size: 2 + rnd() * 4,
+      op: 0.2 + rnd() * 0.3,
     }));
-    // Layer 2: inner glow ring — band ketat
-    const innerRing = Array.from({ length: 54 }).map(() => ({
-      angle: rnd() * Math.PI * 2,
-      radius: 17 + rnd() * 3,
-      size: 0.6 + rnd() * 0.7,
-      op: 0.5 + rnd() * 0.4,
-    }));
-    // Layer 3: main wavy band — band tebal berosilasi (fitur utama Arc Reactor)
-    const waveBand = Array.from({ length: 150 }).map(() => ({
-      angle: rnd() * Math.PI * 2,
-      baseRadius: 27 + rnd() * 8,
-      waveAmp: 2 + rnd() * 4,
-      waveFreq: 3 + Math.floor(rnd() * 4),
-      wavePhase: rnd() * Math.PI * 2,
-      size: 0.5 + rnd() * 0.9,
-      op: 0.4 + rnd() * 0.5,
-    }));
-    // Layer 4: outer halo — sparse
-    const outerHalo = Array.from({ length: 90 }).map(() => ({
-      angle: rnd() * Math.PI * 2,
-      radius: 41 + rnd() * 5,
-      size: 0.4 + rnd() * 0.5,
-      op: 0.2 + rnd() * 0.35,
-      speed: 0.1 + rnd() * 0.2,
-    }));
-    // Layer 5: ambient dust — sangat sparse di tepi
-    const ambient = Array.from({ length: 26 }).map(() => ({
-      angle: rnd() * Math.PI * 2,
-      radius: 46 + rnd() * 2.5,
-      size: 0.3 + rnd() * 0.4,
-      op: 0.15 + rnd() * 0.2,
-    }));
-    // Titik terang berkedip (sparkle)
-    const sparkles = Array.from({ length: 8 }).map(() => ({
-      angle: rnd() * Math.PI * 2,
-      radius: 20 + rnd() * 22,
-      size: 1.2 + rnd() * 1.0,
-      op: 0.6 + rnd() * 0.4,
+
+    // Stars latar
+    const stars = Array.from({ length: 80 }).map(() => ({
+      x: rnd(),
+      y: rnd(),
+      size: 0.3 + rnd() * 0.8,
+      op: 0.3 + rnd() * 0.5,
       phase: rnd() * Math.PI * 2,
-      speed: 1.5 + rnd() * 2,
     }));
 
     let raf = 0;
-    let t0 = performance.now();
+    const t0 = performance.now();
+    let imgLoaded = false;
+    img.onload = () => { imgLoaded = true; };
 
     function resize() {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -467,73 +445,148 @@ function ArcReactorPlanet({ seed, color, glow, name, speaking }: { seed: string;
       const w = rect.width, h = rect.height;
       if (w < 1 || h < 1) { raf = requestAnimationFrame(draw); return; }
       const cx = w / 2, cy = h / 2;
-      const scale = Math.max(0.5, Math.min(w, h) / 100);
+      const radius = Math.max(1, Math.min(w, h) * 0.38);
       const time = (now - t0) * 0.001;
 
       ctx.clearRect(0, 0, w, h);
-      ctx.globalCompositeOperation = "lighter"; // additive blending → glow intens
 
-      const drawParticle = (x: number, y: number, sz: number, col: string, op: number) => {
-        const r = Math.max(0.15, sz * scale);
+      // === 1. Background stars ===
+      for (const s of stars) {
+        const sx = s.x * w;
+        const sy = s.y * h;
+        const dx = sx - cx, dy = sy - cy;
+        if (dx * dx + dy * dy < radius * radius * 1.2) continue;
+        const twinkle = 0.5 + 0.5 * Math.sin(time * 2 + s.phase);
+        ctx.fillStyle = `rgba(255,255,255,${s.op * twinkle})`;
         ctx.beginPath();
-        ctx.arc(x, y, r, 0, Math.PI * 2);
-        ctx.fillStyle = col;
-        ctx.globalAlpha = op;
-        ctx.shadowBlur = r * 3;
-        ctx.shadowColor = col;
+        ctx.arc(sx, sy, s.size, 0, Math.PI * 2);
         ctx.fill();
-      };
-
-      // Layer 1: core dust (rotasi lambat searah jarum jam)
-      const coreRot = time * 0.3;
-      for (const p of coreDust) {
-        const a = p.angle + coreRot * p.speed;
-        const r = p.radius * scale;
-        drawParticle(cx + Math.cos(a) * r, cy + Math.sin(a) * r, p.size, glow, p.op);
       }
 
-      // Layer 2: inner glow ring (rotasi berlawanan)
-      const innerRot = -time * 0.4;
-      for (const p of innerRing) {
-        const a = p.angle + innerRot;
-        const r = p.radius * scale;
-        drawParticle(cx + Math.cos(a) * r, cy + Math.sin(a) * r, p.size, glow, p.op);
+      // === 2. Atmosphere glow (visualizer — pulse saat speaking) ===
+      const speakPulse = speaking ? (0.6 + 0.4 * Math.sin(time * 4)) : 1.0; // pulse 4Hz saat speaking
+      const atmosIntensity = speaking ? 1.5 : 1.0;
+      const atmosGrad = ctx.createRadialGradient(cx, cy, radius * 0.95, cx, cy, radius * 1.3);
+      atmosGrad.addColorStop(0, `rgba(100, 180, 255, 0.0)`);
+      atmosGrad.addColorStop(0.4, `rgba(100, 180, 255, ${0.3 * atmosIntensity * speakPulse})`);
+      atmosGrad.addColorStop(1, `rgba(100, 180, 255, 0.0)`);
+      ctx.fillStyle = atmosGrad;
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius * 1.3 * (speaking ? 1 + 0.05 * speakPulse : 1), 0, Math.PI * 2);
+      ctx.fill();
+
+      // Extra glow ring saat speaking (visualizer aura)
+      if (speaking) {
+        ctx.strokeStyle = `${glow}${Math.floor(80 + 100 * speakPulse).toString(16)}`;
+        ctx.lineWidth = 2 + speakPulse * 2;
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius * (1.05 + 0.03 * speakPulse), 0, Math.PI * 2);
+        ctx.stroke();
       }
 
-      // Layer 3: main wavy band (fitur utama — gelombang sinusoidal)
-      const waveRot = time * 0.25;
-      for (const p of waveBand) {
-        const a = p.angle + waveRot;
-        const r = (p.baseRadius + p.waveAmp * Math.sin(a * p.waveFreq + p.wavePhase + time * 2)) * scale;
-        drawParticle(cx + Math.cos(a) * r, cy + Math.sin(a) * r, p.size, color, p.op);
+      // === 3. Earth sphere with texture ===
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+      ctx.clip();
+
+      if (imgLoaded && imgRef.current) {
+        // Rotasi: 60s per putaran (demo) atau 24h (real-time)
+        const rotationSpeed = realTimeRotation ? (1 / 86400) : (1 / 60);
+        const rotation = (time * rotationSpeed) % 1; // 0..1
+
+        // Draw Earth image dengan horizontal shift untuk simulate rotation
+        // Gambar asli 640x800, Earth ada di upper 70% — crop & scale
+        const imgW = imgRef.current.naturalWidth;
+        const imgH = imgRef.current.naturalHeight;
+        // Crop area: top 0% to 68% (Earth area, skip bottom text)
+        const cropTop = 0;
+        const cropBottom = 0.68;
+        const cropH = imgH * (cropBottom - cropTop);
+
+        // Draw 2 copies side-by-side untuk seamless wrap (rotation illusion)
+        const drawW = radius * 2.2;
+        const drawH = radius * 2.2;
+        const offsetX = -rotation * drawW;
+
+        // Source: full image width, cropped height
+        // Draw 3 copies untuk seamless infinite scroll
+        for (let i = -1; i <= 1; i++) {
+          ctx.drawImage(
+            imgRef.current,
+            0, imgH * cropTop, imgW, cropH,  // source
+            cx - drawW / 2 + offsetX + i * drawW, cy - drawH / 2,  // dest
+            drawW, drawH  // dest size
+          );
+        }
+      } else {
+        // Fallback: ocean gradient kalau image belum load
+        const oceanGrad = ctx.createRadialGradient(cx - radius * 0.3, cy - radius * 0.3, radius * 0.1, cx, cy, radius);
+        oceanGrad.addColorStop(0, "#1a5a8a");
+        oceanGrad.addColorStop(0.5, "#0f3d6b");
+        oceanGrad.addColorStop(1, "#06203f");
+        ctx.fillStyle = oceanGrad;
+        ctx.fillRect(cx - radius, cy - radius, radius * 2, radius * 2);
       }
 
-      // Layer 4: outer halo (sangat lambat)
-      const haloRot = time * 0.15;
-      for (const p of outerHalo) {
-        const a = p.angle + haloRot * p.speed;
-        const r = p.radius * scale;
-        drawParticle(cx + Math.cos(a) * r, cy + Math.sin(a) * r, p.size, color, p.op * 0.7);
+      // === 4. Cloud overlay (rotasi lebih lambat) ===
+      const cloudRotationSpeed = realTimeRotation ? (1 / 86400) * 0.7 : (1 / 60) * 0.7;
+      const cloudRotation = (time * cloudRotationSpeed) % 1;
+      const cloudOffsetX = -cloudRotation * radius * 2.2;
+      ctx.globalAlpha = 0.4;
+      for (let i = -1; i <= 1; i++) {
+        for (const c of clouds) {
+          const px = cx + (c.lon / (Math.PI * 2)) * radius * 2.2 + cloudOffsetX + i * radius * 2.2;
+          const py = cy + c.lat * radius * 0.5;
+          // Hanya draw jika dalam circle
+          const dx = px - cx, dy = py - cy;
+          if (dx * dx + dy * dy > radius * radius) continue;
+          ctx.fillStyle = `rgba(255,255,255,${c.op})`;
+          ctx.beginPath();
+          ctx.arc(px, py, c.size, 0, Math.PI * 2);
+          ctx.fill();
+        }
       }
-
-      // Layer 5: ambient dust
-      for (const p of ambient) {
-        const a = p.angle + time * 0.1;
-        const r = p.radius * scale;
-        drawParticle(cx + Math.cos(a) * r, cy + Math.sin(a) * r, p.size, glow, p.op);
-      }
-
-      // Sparkles (titik terang berkedip)
-      for (const p of sparkles) {
-        const a = p.angle + time * 0.2;
-        const r = p.radius * scale;
-        const flicker = 0.5 + 0.5 * Math.sin(time * p.speed + p.phase);
-        drawParticle(cx + Math.cos(a) * r, cy + Math.sin(a) * r, p.size, glow, p.op * flicker);
-      }
-
-      ctx.globalCompositeOperation = "source-over";
       ctx.globalAlpha = 1;
-      ctx.shadowBlur = 0;
+
+      // === 5. Day/night terminator ===
+      const sunAngle = Math.PI * 0.3;
+      const nightGrad = ctx.createLinearGradient(
+        cx + Math.cos(sunAngle) * radius, cy + Math.sin(sunAngle) * radius,
+        cx - Math.cos(sunAngle) * radius, cy - Math.sin(sunAngle) * radius
+      );
+      nightGrad.addColorStop(0, "rgba(0,0,0,0)");
+      nightGrad.addColorStop(0.5, "rgba(0,0,0,0)");
+      nightGrad.addColorStop(0.75, "rgba(0,0,20,0.5)");
+      nightGrad.addColorStop(1, "rgba(0,0,20,0.9)");
+      ctx.fillStyle = nightGrad;
+      ctx.fillRect(cx - radius, cy - radius, radius * 2, radius * 2);
+
+      // === 6. Specular highlight ===
+      const specGrad = ctx.createRadialGradient(
+        cx - radius * 0.35, cy - radius * 0.35, 0,
+        cx - radius * 0.35, cy - radius * 0.35, radius * 0.6
+      );
+      specGrad.addColorStop(0, "rgba(255,255,255,0.12)");
+      specGrad.addColorStop(1, "rgba(255,255,255,0)");
+      ctx.fillStyle = specGrad;
+      ctx.fillRect(cx - radius, cy - radius, radius * 2, radius * 2);
+
+      // === 7. Edge darkening (sphere illusion) ===
+      const edgeGrad = ctx.createRadialGradient(cx, cy, radius * 0.7, cx, cy, radius);
+      edgeGrad.addColorStop(0, "rgba(0,0,0,0)");
+      edgeGrad.addColorStop(1, "rgba(0,0,0,0.5)");
+      ctx.fillStyle = edgeGrad;
+      ctx.fillRect(cx - radius, cy - radius, radius * 2, radius * 2);
+
+      ctx.restore(); // end clip
+
+      // === 8. Outer ring (tema agent) ===
+      ctx.strokeStyle = `${color}66`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius + 2, 0, Math.PI * 2);
+      ctx.stroke();
 
       raf = requestAnimationFrame(draw);
     }
@@ -543,9 +596,9 @@ function ArcReactorPlanet({ seed, color, glow, name, speaking }: { seed: string;
       cancelAnimationFrame(raf);
       ro.disconnect();
     };
-  }, [seed, color, glow]);
+  }, [seed, color, glow, realTimeRotation]);
 
-  // Pisah nama jadi baris-baris agar muat di lingkaran (max 2-3 baris)
+  // Pisah nama jadi baris-baris
   const nameWords = (name || "").trim().split(/\s+/);
   const nameLines: string[] = [];
   if (nameWords.length === 1) {
@@ -553,25 +606,22 @@ function ArcReactorPlanet({ seed, color, glow, name, speaking }: { seed: string;
   } else if (nameWords.length === 2) {
     nameLines.push(nameWords[0], nameWords[1]);
   } else {
-    // gabungkan menjadi 2 baris
     const mid = Math.ceil(nameWords.length / 2);
     nameLines.push(nameWords.slice(0, mid).join(" "), nameWords.slice(mid).join(" "));
   }
 
   return (
-    <div className="arc-reactor-planet" aria-hidden="true">
+    <div className="arc-reactor-planet earth-globe" aria-hidden="true">
       <canvas ref={canvasRef} className="arc-reactor-canvas" />
-      {/* Cincin tipis statis untuk border hologram */}
       <span className="arc-reactor-ring" style={{ borderColor: `${color}55` }} />
-      {/* Nama agent dinamis di pusat (tanpa shadow/glow) */}
-      <div ref={nameRef} className="arc-reactor-name font-display" style={{ color: "#ffffff" }}>
-        {nameLines.map((ln, i) => (
-          <span key={i} className="arc-reactor-name-line">{ln}</span>
-        ))}
-      </div>
       {speaking && <span className="arc-reactor-pulse" style={{ borderColor: `${glow}88` }} />}
     </div>
   );
+}
+
+/* Legacy Arc Reactor planet (dipakai kalau EarthGlobe tidak dimuat) */
+function ArcReactorPlanet({ seed, color, glow, name, speaking }: { seed: string; color: string; glow: string; name: string; speaking?: boolean }) {
+  return <EarthGlobe seed={seed} color={color} glow={glow} name={name} speaking={speaking} realTimeRotation={false} />;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1660,7 +1710,7 @@ function RenameAgentModal({ body, onClose, onRename, voices }: RenameAgentModalP
           <p className="field-hint font-mono">
             {webhookUrl
               ? "✅ Mode n8n: pesan akan dikirim ke webhook ini. Workflow n8n Anda akan memproses & membalas."
-              : "ℹ️ Mode LLM fallback: agent merespons via AI bawaan (z-ai-web-dev-sdk). Set webhook URL untuk connect ke workflow n8n Anda."}
+              : "ℹ️ Agent belum dikonfigurasi. Set webhook URL untuk connect ke workflow n8n Anda."}
           </p>
           <p className="field-hint font-mono" style={{ marginTop: 6, color: "#5eead4" }}>
             Pattern disarankan: <code>{`{n8n-base-url}/webhook/agent-{agentId}`}</code><br/>
@@ -1874,10 +1924,15 @@ function CentralReactorLogo({ allBodies, activeAgentId, speakingId, switching, o
 
         {/* Status label di atas logo */}
         <span className="cr-status-label font-mono">
-          {switching ? "SWITCHING…" : isSpeaking ? "● ACTIVE" : "○ STANDBY"}
+          {switching ? "SWITCHING…" : isSpeaking ? "● ACTIVE" : "STANDBY"}
         </span>
 
-        {/* Role label di bawah logo */}
+        {/* Name label di bawah logo (di atas role) */}
+        <span className="cr-name-label font-display" style={{ color: current.glow }}>
+          {current.name.toUpperCase()}
+        </span>
+
+        {/* Role label di bawah name */}
         <span className="cr-role-label font-mono" style={{ color: current.color }}>
           {current.role.toUpperCase()}
         </span>
@@ -2910,7 +2965,7 @@ export default function ArtechOrchestrator() {
           transition: border-color .6s ease, opacity .6s ease;
         }
         .cr-ring-1{
-          width:100%; height:100%;
+          width:112%; height:112%;
           border-width:0.3vmin;
           border-top-color:var(--agent-color, #5eead4);
           border-right-color:var(--agent-color, #5eead4);
@@ -2920,7 +2975,7 @@ export default function ArtechOrchestrator() {
           animation: cr-spin 8s linear infinite;
         }
         .cr-ring-2{
-          width:88%; height:88%;
+          width:100%; height:100%;
           border-width:0.2vmin;
           border-top-color:transparent;
           border-right-color:var(--agent-glow, #5eead4);
@@ -2930,7 +2985,7 @@ export default function ArtechOrchestrator() {
           animation: cr-spin-rev 12s linear infinite;
         }
         .cr-ring-3{
-          width:76%; height:76%;
+          width:80%; height:80%;
           border-width:0.25vmin;
           border-top-color:var(--agent-color, #5eead4);
           border-right-color:transparent;
@@ -2939,8 +2994,9 @@ export default function ArtechOrchestrator() {
           opacity:0.8;
           animation: cr-spin 6s linear infinite;
         }
+        /* Ring 4 (dashed/striped) — di luar globe, ada gap dari ring 3 */
         .cr-ring-4{
-          width:64%; height:64%;
+          width:72%; height:72%;
           border-width:0.15vmin;
           border-style:dashed;
           border-color:var(--agent-glow, #5eead4);
@@ -2948,7 +3004,7 @@ export default function ArtechOrchestrator() {
           animation: cr-spin-rev 10s linear infinite;
         }
         .cr-ring-5{
-          width:52%; height:52%;
+          width:56%; height:56%;
           border-width:0.2vmin;
           border-top-color:transparent;
           border-right-color:transparent;
@@ -2977,7 +3033,7 @@ export default function ArtechOrchestrator() {
         @keyframes cr-spin{ from{ transform:translate(-50%,-50%) rotate(0deg); } to{ transform:translate(-50%,-50%) rotate(360deg); } }
         @keyframes cr-spin-rev{ from{ transform:translate(-50%,-50%) rotate(360deg); } to{ transform:translate(-50%,-50%) rotate(0deg); } }
 
-        /* Tick marks (HUD style) di ring terluar */
+        /* Tick marks (HUD style) — digeser ke dalam agar tidak nempel ring 1 */
         .cr-ticks{
           position:absolute; top:50%; left:50%;
           width:100%; height:100%;
@@ -2988,18 +3044,18 @@ export default function ArtechOrchestrator() {
         .ring-state-active .cr-ticks{ animation-duration:20s; }
         .ring-state-switching .cr-ticks{ animation-duration:120s; opacity:0.3; }
         .cr-tick{
-          position:absolute; top:0; left:50%;
+          position:absolute; top:1.5vmin; left:50%;
           width:1px; height:1.2vmin;
           background:var(--agent-color, #5eead4);
           opacity:0.4;
-          transform-origin:0 23vmin;
+          transform-origin:0 21.5vmin;
         }
         .cr-tick:nth-child(5n){ height:1.8vmin; opacity:0.7; }
 
         /* Core particle wrap (Arc Reactor) */
         .cr-core-wrap{
           position:absolute; top:50%; left:50%;
-          width:42%; height:42%;
+          width:48%; height:48%;
           transform:translate(-50%,-50%);
           border-radius:50%;
           overflow:hidden;
@@ -3023,19 +3079,32 @@ export default function ArtechOrchestrator() {
 
         /* Status & role labels */
         .cr-status-label{
-          position:absolute; top:-3.5vmin; left:50%;
+          position:absolute; top:-9vmin; left:50%;
           transform:translateX(-50%);
           font-size:1.6vmin; letter-spacing:0.3em;
           color:var(--agent-glow, #5eead4);
-          opacity:0.8;
+          opacity:0.9;
           white-space:nowrap;
+          z-index:20;
+          padding:0.3vmin 1vmin;
+          background:rgba(5,6,13,0.7);
+          border-radius:999px;
+          border:1px solid rgba(255,255,255,0.08);
+          backdrop-filter:blur(8px);
         }
         .cr-role-label{
-          position:absolute; bottom:-3.5vmin; left:50%;
+          position:absolute; bottom:-13vmin; left:50%;
           transform:translateX(-50%);
           font-size:1.4vmin; letter-spacing:0.25em;
           opacity:0.7;
           white-space:nowrap;
+        }
+        .cr-name-label{
+          position:absolute; bottom:-9vmin; left:50%;
+          transform:translateX(-50%);
+          font-size:2.2vmin; letter-spacing:0.15em; font-weight:700;
+          white-space:nowrap;
+          text-shadow:0 0 4px #05060d, 0 1px 6px rgba(0,0,0,0.8);
         }
 
         /* Hamburger button (3-strip menu toggle) */
@@ -3073,8 +3142,9 @@ export default function ArtechOrchestrator() {
 
         @media (max-width: 768px){
           .central-logo-btn{ width:60vmin; height:60vmin; }
-          .cr-status-label{ font-size:2.4vmin; top:-5vmin; }
-          .cr-role-label{ font-size:2.2vmin; bottom:-5vmin; }
+          .cr-status-label{ font-size:2.4vmin; top:-12vmin; }
+          .cr-name-label{ font-size:3vmin; bottom:-10vmin; }
+          .cr-role-label{ font-size:2.2vmin; bottom:-15vmin; }
         }
       `}</style>
 

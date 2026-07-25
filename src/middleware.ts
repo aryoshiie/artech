@@ -28,12 +28,18 @@ const STATIC_PREFIXES = [
 
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
+
+  // Allow static assets
   if (STATIC_PREFIXES.some((p) => pathname.startsWith(p))) {
     return NextResponse.next();
   }
+
+  // Allow public paths
   if (PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(p + "/"))) {
     return NextResponse.next();
   }
+
+  // Cek session cookie
   const session = req.cookies.get("artech-session")?.value;
   if (!session) {
     const url = req.nextUrl.clone();
@@ -41,6 +47,7 @@ export async function middleware(req: NextRequest) {
     url.search = "";
     return NextResponse.redirect(url);
   }
+
   return NextResponse.next();
 }
 
