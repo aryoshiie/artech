@@ -938,6 +938,44 @@ interface HoloDrawerProps {
   onToggleVoice: () => void;
 }
 
+function SyncRegistryButton({ onToast }: { onToast: (s: any) => void }) {
+  const [syncing, setSyncing] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+
+  async function handleSync() {
+    setSyncing(true);
+    setResult(null);
+    try {
+      const res = await fetch("/api/agents/sync-registry", { method: "POST" });
+      const data = await res.json();
+      if (res.ok) {
+        setResult(`✅ ${data.message}`);
+      } else {
+        setResult(`❌ ${data.error || "Gagal sync"}`);
+      }
+    } catch (e: any) {
+      setResult(`❌ Error: ${e.message}`);
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  return (
+    <div>
+      <button
+        className="btn font-mono"
+        onClick={handleSync}
+        disabled={syncing}
+        style={{ background: "rgba(94,234,212,0.1)", borderColor: "rgba(94,234,212,0.4)", color: "#5eead4" }}
+      >
+        {syncing ? <Loader2 size={14} className="spin-icon" /> : <Orbit size={14} />}
+        {syncing ? "Menyinkronkan..." : "Sync ke n8n Registry"}
+      </button>
+      {result && <p className="font-mono" style={{ fontSize: 11, marginTop: 8, color: result.startsWith("✅") ? "#5eead4" : "#ff8080" }}>{result}</p>}
+    </div>
+  );
+}
+
 function HoloDrawer({
   body, messages, open, onClose, onSend, input, onInputChange,
   pendingFiles, onAddFiles, onRemoveFile, sending, speaking,
@@ -1284,6 +1322,17 @@ function SettingsModal({ settings, onChange, onClose, onTest, testState, onReset
         {testState === "ok" && <p className="font-mono" style={{ color: "#5eead4", fontSize: 12 }}>Terhubung — workflow merespons.</p>}
         {testState === "fail" && <p className="font-mono" style={{ color: "#ff8080", fontSize: 12 }}>Gagal terhubung. Periksa URL dan CORS di n8n.</p>}
 
+        {/* SYNC AGENT REGISTRY */}
+        <div style={{ marginTop: 18, paddingTop: 14, borderTop: "1px solid rgba(255,255,255,0.08)" }}>
+          <div className="font-display" style={{ fontSize: 13, marginBottom: 4, display: "flex", alignItems: "center", gap: 6 }}>
+            <Orbit size={14} /> Sinkronisasi n8n (Agent Registry)
+          </div>
+          <p className="field-hint font-mono" style={{ marginBottom: 10 }}>
+            Sync data agent (nama, role, desc, status) ke schema Artha di Supabase. Jalankan setelah edit agent agar workflow n8n Artha membaca daftar agent terbaru.
+          </p>
+          <SyncRegistryButton onToast={onChange} />
+        </div>
+
         {/* KEAMANAN — Manajemen Passkey (WebAuthn) */}
         <div style={{ marginTop: 18, paddingTop: 14, borderTop: "1px solid rgba(255,255,255,0.08)" }}>
           <div className="font-display" style={{ fontSize: 13, marginBottom: 4, display: "flex", alignItems: "center", gap: 6 }}>
@@ -1543,6 +1592,9 @@ interface RenameAgentModalProps {
     voiceRate?: number;
     voiceGender?: string;
     voiceName?: string | null;
+    systemPrompt?: string | null;
+    userPrompt?: string | null;
+    isActive?: boolean;
   }) => void;
   voices: SpeechSynthesisVoice[];
 }
@@ -1561,6 +1613,9 @@ function RenameAgentModal({ body, onClose, onRename, voices }: RenameAgentModalP
   const [voiceGender, setVoiceGender] = useState<string>(body?.voiceGender || "neutral");
   const [voiceName, setVoiceName] = useState<string>(body?.voiceName || "");
   const [webhookUrl, setWebhookUrl] = useState<string>(body?.webhookUrl || "");
+  const [systemPrompt, setSystemPrompt] = useState<string>(body?.systemPrompt || "");
+  const [userPrompt, setUserPrompt] = useState<string>(body?.userPrompt || "");
+  const [isActive, setIsActive] = useState<boolean>(body?.isActive ?? true);
   const [testing, setTesting] = useState(false);
 
   // Sinkronisasi slider HSL → color & glow
@@ -1722,6 +1777,61 @@ function RenameAgentModal({ body, onClose, onRename, voices }: RenameAgentModalP
         </div>
         {/* ===== END N8N WEBHOOK SECTION ===== */}
 
+        {/* ===== PROMPT CONFIGURATION SECTION (CMS for n8n) ===== */}
+        <div className="voice-section">
+          <div className="voice-section-title font-display">
+            <Settings size={14} /> Konfigurasi Prompt (CMS)
+          </div>
+
+          {/* Toggle Status Online/Offline */}
+          <div className="toggle-row" style={{ marginBottom: 14 }}>
+            <div>
+              <div className="font-display" style={{ fontSize: 13 }}>Status Agent</div>
+              <div className="field-hint font-mono">Jika OFF, agent tidak akan dipanggil oleh Jarvis di n8n.</div>
+            </div>
+            <button
+              type="button"
+              className={`switch ${isActive ? "switch-on" : ""}`}
+              onClick={() => setIsActive(!isActive)}
+              aria-label="Toggle status agent"
+            >
+              <span className="switch-knob" />
+            </button>
+          </div>
+
+          <label className="field-label font-mono">Deskripsi Singkat (Tugas Agent)</label>
+          <textarea
+            className="text-input font-mono"
+            value={desc}
+            onChange={(e) => setDesc(e.target.value)}
+            rows={2}
+            style={{ resize: "vertical", fontFamily: "inherit", minHeight: 40 }}
+            placeholder="Misal: Menangani riset pasar dan analisis data kompetitor."
+          />
+
+          <label className="field-label font-mono">System Prompt</label>
+          <textarea
+            className="text-input font-mono"
+            value={systemPrompt}
+            onChange={(e) => setSystemPrompt(e.target.value)}
+            rows={6}
+            style={{ resize: "vertical", fontFamily: "inherit", minHeight: 100 }}
+            placeholder="Kamu adalah Karen, Research Specialist Artech. Tugasmu melakukan riset data. Output WAJIB JSON."
+          />
+
+          <label className="field-label font-mono">User Prompt (Template)</label>
+          <textarea
+            className="text-input font-mono"
+            value={userPrompt}
+            onChange={(e) => setUserPrompt(e.target.value)}
+            rows={6}
+            style={{ resize: "vertical", fontFamily: "inherit", minHeight: 100 }}
+            placeholder="=== DATA ===&#10;[DATA]&#10;&#10;=== INSTRUKSI ===&#10;[CMD]"
+          />
+          <p className="field-hint font-mono">Placeholder: [MEM], [DATA], [CMD], [MODE], [AGENT_LIST]</p>
+        </div>
+        {/* ===== END PROMPT CONFIGURATION SECTION ===== */}
+
         {/* ===== VOICE SETTINGS SECTION ===== */}
         <div className="voice-section">
           <div className="voice-section-title font-display">
@@ -1812,6 +1922,9 @@ function RenameAgentModal({ body, onClose, onRename, voices }: RenameAgentModalP
               webhookUrl: webhookUrl || null,
               voicePitch, voiceRate, voiceGender,
               voiceName: voiceName || null,
+              systemPrompt: systemPrompt || null,
+              userPrompt: userPrompt || null,
+              isActive,
             })}
           >
             <CheckCircle2 size={14} /> Simpan
@@ -2289,6 +2402,7 @@ export default function ArtechOrchestrator() {
   const handleRenameAgent = useCallback(async (agentId: string, data: {
     name: string; role: string; desc: string; color: string; glow: string; webhookUrl?: string | null;
     voicePitch?: number; voiceRate?: number; voiceGender?: string; voiceName?: string | null;
+    systemPrompt?: string | null; userPrompt?: string | null; isActive?: boolean;
   }) => {
     try {
       const res = await fetch(`/api/agents/${agentId}`, {

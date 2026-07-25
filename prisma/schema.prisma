@@ -68,6 +68,11 @@ model Agent {
   webhookUrl       String?
   workflowId       String?
 
+  // Prompt Management (CMS)
+  systemPrompt     String?   // System prompt untuk AI Agent di n8n
+  userPrompt       String?   // Template user prompt dengan placeholder [MEM], [DATA], dll
+  isActive         Boolean   @default(true)  // Toggle status Online/Offline agent
+
   xp               Int      @default(0)
   level            Int      @default(1)
 
