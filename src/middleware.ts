@@ -9,6 +9,7 @@ const PUBLIC_PATHS = [
   "/api/auth",
   "/api/debug",
   "/api/auth/status",
+  "/api/ai/tts",
   "/artech-deploy.zip",
   "/setup-database.sql",
   "/setup-n8n.md",

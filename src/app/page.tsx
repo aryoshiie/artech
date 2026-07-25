@@ -1580,28 +1580,31 @@ function RenameAgentModal({ body, onClose, onRename, voices }: RenameAgentModalP
     ? voices.filter((v) => guessVoiceGender(v) === voiceGender)
     : voices;
 
-  function testVoice() {
-    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+  async function testVoice() {
     try {
-      window.speechSynthesis.cancel();
-      const utter = new SpeechSynthesisUtterance(`Halo, saya ${name || body?.name}.`);
-      utter.lang = "id-ID";
-      utter.rate = voiceRate;
-      utter.pitch = voicePitch;
-      // Pilih voice
-      let chosen: SpeechSynthesisVoice | null = null;
-      if (voiceName) {
-        chosen = voices.find((v) => v.name === voiceName || v.voiceURI === voiceName) || null;
+      setTesting(true);
+      const gender = voiceGender || "male";
+      const res = await fetch("/api/ai/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: `Halo, saya ${name || body?.name}.`, gender }),
+      });
+      if (res.ok) {
+        const blob = await res.blob();
+        const audioUrl = URL.createObjectURL(blob);
+        const audio = new Audio(audioUrl);
+        audio.onended = () => {
+          setTesting(false);
+          URL.revokeObjectURL(audioUrl);
+        };
+        audio.onerror = () => setTesting(false);
+        await audio.play();
+      } else {
+        setTesting(false);
       }
-      if (!chosen) {
-        chosen = pickVoiceByGender(voices, voiceGender);
-      }
-      if (chosen) utter.voice = chosen;
-      utter.onstart = () => setTesting(true);
-      utter.onend = () => setTesting(false);
-      utter.onerror = () => setTesting(false);
-      window.speechSynthesis.speak(utter);
-    } catch (e) { /* ignore */ }
+    } catch {
+      setTesting(false);
+    }
   }
 
   return (
@@ -2072,31 +2075,47 @@ export default function ArtechOrchestrator() {
 
   const getBody = useCallback((id: string | null) => allBodies.find((b) => b.id === id) || null, [allBodies]);
 
-  /* ---- TTS dengan voice per-agent (gender + pitch + rate) ---- */
-  const speak = useCallback((body: Agent, text: string) => {
+  /* ---- TTS dengan Edge TTS (Microsoft Neural Voice, natural) ---- */
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const speak = useCallback(async (body: Agent, text: string) => {
     if (!settings.voiceEnabled) return;
-    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+    if (!text || text.trim().length === 0) return;
     try {
-      window.speechSynthesis.cancel();
-      const utter = new SpeechSynthesisUtterance(text);
-      utter.lang = "id-ID";
-      utter.rate = body.voiceRate || 1;
-      utter.pitch = body.voicePitch || 1;
-      // Voice selection per agent: voiceName explicit > gender-based > fallback
-      const allVoices = window.speechSynthesis.getVoices();
-      let chosen: SpeechSynthesisVoice | null = null;
-      if (body.voiceName) {
-        chosen = allVoices.find((v) => v.name === body.voiceName || v.voiceURI === body.voiceName) || null;
+      // Stop audio sebelumnya
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.src = "";
       }
-      if (!chosen) {
-        chosen = pickVoiceByGender(allVoices, body.voiceGender);
+      // Set speaking state
+      setSpeakingId(body.id);
+      // Gender: male/female/neutral → Edge TTS voice
+      const gender = body.voiceGender || "male";
+      // Call Edge TTS API
+      const res = await fetch("/api/ai/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: text.slice(0, 500), gender }),
+      });
+      if (!res.ok) {
+        setSpeakingId(null);
+        return;
       }
-      if (chosen) utter.voice = chosen;
-      utter.onstart = () => setSpeakingId(body.id);
-      utter.onend = () => setSpeakingId(null);
-      utter.onerror = () => setSpeakingId(null);
-      window.speechSynthesis.speak(utter);
-    } catch (e) { /* speech tidak tersedia */ }
+      const blob = await res.blob();
+      const audioUrl = URL.createObjectURL(blob);
+      const audio = new Audio(audioUrl);
+      audioRef.current = audio;
+      audio.onended = () => {
+        setSpeakingId(null);
+        URL.revokeObjectURL(audioUrl);
+      };
+      audio.onerror = () => {
+        setSpeakingId(null);
+        URL.revokeObjectURL(audioUrl);
+      };
+      await audio.play();
+    } catch {
+      setSpeakingId(null);
+    }
   }, [settings.voiceEnabled]);
 
   /* ---- files ---- */
@@ -2344,15 +2363,22 @@ export default function ArtechOrchestrator() {
       // Auto-hide setelah 12 detik
       setTimeout(() => setVoiceReply(null), 12000);
 
-      // Speak reply via TTS kalau voice enabled
-      if (settings.voiceEnabled && typeof window !== "undefined" && "speechSynthesis" in window) {
+      // Speak reply via Edge TTS kalau voice enabled
+      if (settings.voiceEnabled) {
         try {
-          window.speechSynthesis.cancel();
-          const utter = new SpeechSynthesisUtterance(reply.slice(0, 500));
-          utter.lang = "id-ID";
-          utter.rate = data.agent?.voiceRate ?? 1;
-          utter.pitch = data.agent?.voicePitch ?? 1;
-          window.speechSynthesis.speak(utter);
+          const gender = data.agent?.voiceGender || "male";
+          const ttsRes = await fetch("/api/ai/tts", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text: reply.slice(0, 500), gender }),
+          });
+          if (ttsRes.ok) {
+            const blob = await ttsRes.blob();
+            const audioUrl = URL.createObjectURL(blob);
+            const audio = new Audio(audioUrl);
+            audio.onended = () => URL.revokeObjectURL(audioUrl);
+            await audio.play();
+          }
         } catch {}
       }
 
