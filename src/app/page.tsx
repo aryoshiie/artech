@@ -1527,6 +1527,9 @@ interface RenameAgentModalProps {
     voiceRate?: number;
     voiceGender?: string;
     voiceName?: string | null;
+    systemPrompt?: string | null;
+    userPrompt?: string | null;
+    isActive?: boolean;
   }) => void;
   voices: SpeechSynthesisVoice[];
 }
@@ -1545,6 +1548,9 @@ function RenameAgentModal({ body, onClose, onRename, voices }: RenameAgentModalP
   const [voiceGender, setVoiceGender] = useState<string>(body?.voiceGender || "neutral");
   const [voiceName, setVoiceName] = useState<string>(body?.voiceName || "");
   const [webhookUrl, setWebhookUrl] = useState<string>(body?.webhookUrl || "");
+  const [systemPrompt, setSystemPrompt] = useState<string>(body?.systemPrompt || "");
+  const [userPrompt, setUserPrompt] = useState<string>(body?.userPrompt || "");
+  const [isActive, setIsActive] = useState<boolean>(body?.isActive ?? true);
   const [testing, setTesting] = useState(false);
 
   // Sinkronisasi slider HSL → color & glow
@@ -1872,6 +1878,9 @@ function RenameAgentModal({ body, onClose, onRename, voices }: RenameAgentModalP
               webhookUrl: webhookUrl || null,
               voicePitch, voiceRate, voiceGender,
               voiceName: voiceName || null,
+              systemPrompt: systemPrompt || null,
+              userPrompt: userPrompt || null,
+              isActive,
             })}
           >
             <CheckCircle2 size={14} /> Simpan
@@ -1987,10 +1996,15 @@ function CentralReactorLogo({ allBodies, activeAgentId, speakingId, switching, o
 
         {/* Status label di atas logo */}
         <span className="cr-status-label font-mono">
-          {switching ? "SWITCHING…" : isSpeaking ? "● ACTIVE" : "○ STANDBY"}
+          {switching ? "SWITCHING…" : isSpeaking ? "● ACTIVE" : "STANDBY"}
         </span>
 
-        {/* Role label di bawah logo */}
+        {/* Name label di bawah logo (di atas role) */}
+        <span className="cr-name-label font-display" style={{ color: current.glow }}>
+          {current.name.toUpperCase()}
+        </span>
+
+        {/* Role label di bawah name */}
         <span className="cr-role-label font-mono" style={{ color: current.color }}>
           {current.role.toUpperCase()}
         </span>
