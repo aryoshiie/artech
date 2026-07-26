@@ -3165,14 +3165,14 @@ export default function ArtechOrchestrator() {
           white-space:nowrap;
         }
         .cr-role-label{
-          position:absolute; bottom:-5.5vmin; left:50%;
+          position:absolute; bottom:-11vmin; left:50%;
           transform:translateX(-50%);
           font-size:1.4vmin; letter-spacing:0.25em;
           opacity:0.7;
           white-space:nowrap;
         }
         .cr-name-label{
-          position:absolute; bottom:-2.5vmin; left:50%;
+          position:absolute; bottom:-7vmin; left:50%;
           transform:translateX(-50%);
           font-size:2.2vmin; letter-spacing:0.15em; font-weight:700;
           white-space:nowrap;
@@ -3215,7 +3215,8 @@ export default function ArtechOrchestrator() {
         @media (max-width: 768px){
           .central-logo-btn{ width:60vmin; height:60vmin; }
           .cr-status-label{ font-size:2.4vmin; top:-5vmin; }
-          .cr-role-label{ font-size:2.2vmin; bottom:-5vmin; }
+          .cr-name-label{ font-size:3vmin; bottom:-8vmin; }
+          .cr-role-label{ font-size:2.2vmin; bottom:-12vmin; }
         }
       `}</style>
 
