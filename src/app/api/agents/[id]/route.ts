@@ -56,9 +56,6 @@ export async function PATCH(
       voiceName: true,
       webhookUrl: true,
       workflowId: true,
-      systemPrompt: true,
-      userPrompt: true,
-      isActive: true,
     };
 
     const data: Record<string, unknown> = {};

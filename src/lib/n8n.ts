@@ -1,8 +1,9 @@
-// src/lib/n8n.ts — n8n webhook client ONLY (z-ai SDK fallback REMOVED).
-// Jika agent tidak punya webhook URL → return error (agent belum dikonfigurasi).
-// Reason: z-ai-web-dev-sdk hanya jalan di sandbox Z.ai, tidak di production server.
+// src/lib/n8n.ts — HYBRID mode: n8n webhook OR LLM fallback per agent.
+// Jika agent.webhookUrl di-set (URL http/https real) → kirim ke n8n workflow.
+// Jika tidak di-set → fallback ke z-ai-web-dev-sdk LLM dengan persona per agent.
 
 import { db } from "./db";
+import ZAI from "z-ai-web-dev-sdk";
 
 export interface N8nPayload {
   agentId: string;
@@ -31,13 +32,22 @@ export interface N8nResponse {
   error?: string;
 }
 
+// zai singleton (initialized lazily)
+let zaiInstance: any = null;
+async function getZai() {
+  if (!zaiInstance) {
+    zaiInstance = await ZAI.create();
+  }
+  return zaiInstance;
+}
+
 /**
  * Dapatkan webhook URL untuk agent.
  * Prioritas:
  *   1. agent.webhookUrl (kalau di-set & URL http real → n8n mode)
- *   2. settings.n8nBaseUrl → generate pattern {baseUrl}/webhook/agent-{agentId}
- *   3. settings.webhookUrl (untuk orchestrator/core)
- *   4. Return null (agent belum dikonfigurasi → error)
+ *   2. settings.n8nBaseUrl → generate pattern {baseUrl}/webhook/agent-{agentId} (→ n8n mode)
+ *   3. settings.webhookUrl (untuk orchestrator/core) (→ n8n mode)
+ *   4. Fallback: internal://llm/{agentId} (→ LLM mode)
  */
 export async function getAgentWebhookUrl(agentId: string): Promise<string | null> {
   const agent = await db.agent.findUnique({ where: { id: agentId } });
@@ -61,8 +71,8 @@ export async function getAgentWebhookUrl(agentId: string): Promise<string | null
     return settings.webhookUrl;
   }
 
-  // Tidak ada webhook → return null (akan return error di sendToN8n)
-  return null;
+  // Fallback: LLM mode
+  return `internal://llm/${agentId}`;
 }
 
 /**
@@ -75,10 +85,17 @@ export async function generateWebhookUrl(agentId: string): Promise<string> {
 }
 
 /**
+ * Cek apakah URL adalah internal LLM (bukan n8n webhook real).
+ */
+function isLlmInternal(url: string): boolean {
+  return url.startsWith("internal://llm/");
+}
+
+/**
  * Test koneksi ke n8n webhook (dipakai di Settings).
  */
 export async function testN8nConnection(webhookUrl: string): Promise<boolean> {
-  if (!webhookUrl || !/^https?:\/\//.test(webhookUrl)) return false;
+  if (!webhookUrl || isLlmInternal(webhookUrl)) return true; // LLM mode always "ok"
   try {
     const res = await fetch(webhookUrl, {
       method: "POST",
@@ -93,20 +110,41 @@ export async function testN8nConnection(webhookUrl: string): Promise<boolean> {
 }
 
 /**
- * Kirim payload ke n8n webhook (sync).
- * Jika webhook URL tidak ada → return error "agent belum dikonfigurasi".
+ * Build persona system prompt untuk LLM fallback.
+ */
+function buildSystemPrompt(
+  agent: { name: string; role: string; desc: string },
+  mode: "default" | "bypass"
+): string {
+  return `Kamu adalah ${agent.name}, seorang AI agent dengan peran "${agent.role}".
+
+Deskripsi karakter:
+${agent.desc}
+
+Kamu adalah bagian dari sistem multi-agent "Artech" — sebuah galaksi AI tempat setiap planet adalah agent spesialis. Inti Galaksi (orchestrator) mengkoordinasikan semua agent.
+
+Aturan menjawab:
+- Jawab dengan gaya sesuai peranmu (ringkas & cepat kalau Merkurius, mendalam & analitis kalau Yupiter, teknis kalau Uranus, dll).
+- Gunakan bahasa Indonesia yang natural, ramah, dan profesional.
+- Jawab TO THE POINT. Jangan terlalu panjang kecuali user meminta detail.
+- Kalau pertanyaan di luar kompetensimu, arahkan ke agent yang sesuai dengan singkat.
+- Mode saat ini: ${mode === "bypass" ? "bypass (user memanggilmu langsung)" : "default (lewat orchestrator)"}.
+- Jangan menyebutkan bahwa kamu adalah LLM atau model bahasa. Kamu adalah ${agent.name}.`;
+}
+
+/**
+ * Kirim payload ke n8n webhook (sync) ATAU fallback ke LLM.
  */
 export async function sendToN8n(
   webhookUrl: string,
   payload: N8nPayload
 ): Promise<N8nResponse> {
-  // Validasi webhook URL
-  if (!webhookUrl || !/^https?:\/\//.test(webhookUrl)) {
-    return {
-      error: `Agent "${payload.agentName}" belum dikonfigurasi. Set webhook URL ke n8n workflow di pengaturan agent.`,
-    };
+  // ===== LLM FALLBACK MODE =====
+  if (isLlmInternal(webhookUrl)) {
+    return callLlm(payload);
   }
 
+  // ===== N8N WEBHOOK MODE =====
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 60_000);
   try {
@@ -130,7 +168,6 @@ export async function sendToN8n(
       };
     }
     const text = await res.text();
-    // Deteksi HTML response (biasanya landing page loophole/n8n, bukan workflow response)
     if (text.trimStart().startsWith("<") || text.includes("<!DOCTYPE")) {
       return {
         error: "Webhook n8n belum aktif atau URL salah. Pastikan workflow di n8n sudah diaktifkan dengan Webhook trigger di path yang benar.",
@@ -142,5 +179,68 @@ export async function sendToN8n(
     return { error: `Gagal menghubungi n8n: ${err?.message || String(err)}` };
   } finally {
     clearTimeout(timeout);
+  }
+}
+
+/**
+ * LLM fallback — panggil z-ai-web-dev-sdk dengan persona per agent.
+ */
+async function callLlm(payload: N8nPayload): Promise<N8nResponse> {
+  try {
+    const agentId = payload.agentId;
+    const agent = await db.agent.findUnique({ where: { id: agentId } });
+    if (!agent) {
+      return { error: `Agent ${agentId} tidak ditemukan` };
+    }
+
+    // Fetch recent conversation context (last 6 messages in session)
+    let contextMessages: Array<{ role: "user" | "assistant"; content: string }> = [];
+    if (payload.sessionId) {
+      const recent = await db.message.findMany({
+        where: { sessionId: payload.sessionId },
+        orderBy: { createdAt: "desc" },
+        take: 6,
+      });
+      contextMessages = recent
+        .reverse()
+        .map((m) => ({
+          role: (m.role === "user" ? "user" : "assistant") as "user" | "assistant",
+          content: m.text || "",
+        }))
+        .filter((m) => m.content);
+    }
+
+    const systemPrompt = buildSystemPrompt(
+      { name: agent.name, role: agent.role, desc: agent.desc },
+      payload.mode
+    );
+
+    let userContent = payload.message || "";
+    if (payload.attachments && payload.attachments.length > 0) {
+      const fileSummary = payload.attachments
+        .map((a) => `[file: ${a.name} (${a.kind}, ${a.ext}, ${a.size} bytes)${a.url ? ` url: ${a.url}` : ""}]`)
+        .join(", ");
+      userContent += `\n\n[Lampiran: ${fileSummary}]`;
+    }
+
+    const zai = await getZai();
+    const messages: Array<any> = [
+      { role: "system", content: systemPrompt },
+      ...contextMessages.slice(0, -1),
+      { role: "user", content: userContent },
+    ];
+
+    const completion = await zai.chat.completions.create({
+      model: "glm-4-plus",
+      messages,
+      temperature: 0.8,
+      max_tokens: 800,
+    });
+
+    const reply = completion?.choices?.[0]?.message?.content || "(Agent tidak merespons)";
+    return { reply, endSession: false };
+  } catch (err: any) {
+    console.error("[llm] error:", err);
+    return { error: `Gagal memanggil LLM: ${err?.message || String(err)}` };
   }
 }
