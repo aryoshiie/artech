@@ -1575,31 +1575,59 @@ function RenameAgentModal({ body, onClose, onRename, voices }: RenameAgentModalP
     : voices;
 
   async function testVoice() {
+    setTesting(true);
     try {
-      setTesting(true);
-      const gender = voiceGender || "male";
-      const res = await fetch("/api/ai/tts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: `Halo, saya ${name || body?.name}.`, gender }),
-      });
-      if (res.ok) {
-        const blob = await res.blob();
-        const audioUrl = URL.createObjectURL(blob);
-        const audio = new Audio(audioUrl);
-        // Adjust playbackRate for gender simulation
-        audio.playbackRate = gender === "female" ? 1.0 : (gender === "neutral" ? 0.92 : 0.85);
-        audio.onended = () => {
-          setTesting(false);
-          URL.revokeObjectURL(audioUrl);
-        };
-        audio.onerror = () => setTesting(false);
-        await audio.play();
-      } else {
-        setTesting(false);
-      }
+      const voice = voiceGender === "female" ? "id-ID-GadisNeural" : "id-ID-ArdiNeural";
+      const n8nBase = settings?.n8nBaseUrl || "https://artha.loophole.site";
+      const audioUrl = `${n8nBase}/webhook/tts-gateway?text=${encodeURIComponent(`Halo, saya ${name || body?.name}.`)}&voice=${voice}`;
+      const audio = new Audio(audioUrl);
+      audio.onended = () => setTesting(false);
+      audio.onerror = () => {
+        // Fallback ke Web Speech API
+        try {
+          if (typeof window !== "undefined" && "speechSynthesis" in window) {
+            window.speechSynthesis.cancel();
+            const utter = new SpeechSynthesisUtterance(`Halo, saya ${name || body?.name}.`);
+            utter.lang = "id-ID";
+            utter.rate = voiceRate;
+            utter.pitch = voicePitch;
+            let chosen: SpeechSynthesisVoice | null = null;
+            if (voiceName) {
+              chosen = voices.find((v) => v.name === voiceName || v.voiceURI === voiceName) || null;
+            }
+            if (!chosen) chosen = pickVoiceByGender(voices, voiceGender);
+            if (chosen) utter.voice = chosen;
+            utter.onend = () => setTesting(false);
+            utter.onerror = () => setTesting(false);
+            window.speechSynthesis.speak(utter);
+          } else {
+            setTesting(false);
+          }
+        } catch { setTesting(false); }
+      };
+      await audio.play();
     } catch {
-      setTesting(false);
+      // Fallback ke Web Speech API
+      try {
+        if (typeof window !== "undefined" && "speechSynthesis" in window) {
+          window.speechSynthesis.cancel();
+          const utter = new SpeechSynthesisUtterance(`Halo, saya ${name || body?.name}.`);
+          utter.lang = "id-ID";
+          utter.rate = voiceRate;
+          utter.pitch = voicePitch;
+          let chosen: SpeechSynthesisVoice | null = null;
+          if (voiceName) {
+            chosen = voices.find((v) => v.name === voiceName || v.voiceURI === voiceName) || null;
+          }
+          if (!chosen) chosen = pickVoiceByGender(voices, voiceGender);
+          if (chosen) utter.voice = chosen;
+          utter.onend = () => setTesting(false);
+          utter.onerror = () => setTesting(false);
+          window.speechSynthesis.speak(utter);
+        } else {
+          setTesting(false);
+        }
+      } catch { setTesting(false); }
     }
   }
 
@@ -2140,47 +2168,71 @@ export default function ArtechOrchestrator() {
 
   const getBody = useCallback((id: string | null) => allBodies.find((b) => b.id === id) || null, [allBodies]);
 
-  /* ---- TTS dengan Edge TTS (Microsoft Neural Voice, natural) ---- */
+  /* ---- TTS via n8n Edge TTS (streaming) + fallback Web Speech API ---- */
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const speak = useCallback(async (body: Agent, text: string) => {
     if (!settings.voiceEnabled) return;
     if (!text || text.trim().length === 0) return;
+    
+    setSpeakingId(body.id);
+    
     try {
+      // Stop audio sebelumnya
       if (audioRef.current) {
         audioRef.current.pause();
         audioRef.current.src = "";
       }
-      setSpeakingId(body.id);
-      const gender = body.voiceGender || "male";
-      const res = await fetch("/api/ai/tts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: text.slice(0, 500), gender }),
-      });
-      if (!res.ok) {
-        setSpeakingId(null);
-        return;
-      }
-      const blob = await res.blob();
-      const audioUrl = URL.createObjectURL(blob);
+      
+      // Stream langsung dari n8n webhook (low latency)
+      const n8nBase = settings.n8nBaseUrl || "https://artha.loophole.site";
+      const voice = body.voiceGender === "female" ? "id-ID-GadisNeural" : "id-ID-ArdiNeural";
+      const audioUrl = `${n8nBase}/webhook/tts-gateway?text=${encodeURIComponent(text.slice(0, 200))}&voice=${voice}`;
+      
       const audio = new Audio(audioUrl);
       audioRef.current = audio;
-      // Adjust playbackRate for gender simulation
-      // Male = slower (0.85), Female = normal (1.0), Neutral = slightly slower (0.92)
-      audio.playbackRate = gender === "female" ? 1.0 : (gender === "neutral" ? 0.92 : 0.85);
-      audio.onended = () => {
-        setSpeakingId(null);
-        URL.revokeObjectURL(audioUrl);
-      };
+      audio.onended = () => { setSpeakingId(null); };
       audio.onerror = () => {
-        setSpeakingId(null);
-        URL.revokeObjectURL(audioUrl);
+        // Fallback ke Web Speech API kalau n8n gagal
+        try {
+          if (typeof window !== "undefined" && "speechSynthesis" in window) {
+            window.speechSynthesis.cancel();
+            const utter = new SpeechSynthesisUtterance(text);
+            utter.lang = "id-ID";
+            utter.rate = body.voiceRate || 1;
+            utter.pitch = body.voicePitch || 1;
+            const allVoices = window.speechSynthesis.getVoices();
+            const chosen = pickVoiceByGender(allVoices, body.voiceGender);
+            if (chosen) utter.voice = chosen;
+            utter.onend = () => setSpeakingId(null);
+            utter.onerror = () => setSpeakingId(null);
+            window.speechSynthesis.speak(utter);
+          } else {
+            setSpeakingId(null);
+          }
+        } catch { setSpeakingId(null); }
       };
       await audio.play();
     } catch {
-      setSpeakingId(null);
+      // Fallback ke Web Speech API
+      try {
+        if (typeof window !== "undefined" && "speechSynthesis" in window) {
+          window.speechSynthesis.cancel();
+          const utter = new SpeechSynthesisUtterance(text);
+          utter.lang = "id-ID";
+          utter.rate = body.voiceRate || 1;
+          utter.pitch = body.voicePitch || 1;
+          const allVoices = window.speechSynthesis.getVoices();
+          const chosen = pickVoiceByGender(allVoices, body.voiceGender);
+          if (chosen) utter.voice = chosen;
+          utter.onend = () => setSpeakingId(null);
+          utter.onerror = () => setSpeakingId(null);
+          window.speechSynthesis.speak(utter);
+        } else {
+          setSpeakingId(null);
+        }
+      } catch { setSpeakingId(null); }
     }
-  }, [settings.voiceEnabled]);
+  }, [settings.voiceEnabled, settings.n8nBaseUrl]);
 
   /* ---- files ---- */
   const addFiles = useCallback(async (agentId: string, files: File[]) => {
@@ -2428,24 +2480,41 @@ export default function ArtechOrchestrator() {
       // Auto-hide setelah 12 detik
       setTimeout(() => setVoiceReply(null), 12000);
 
-      // Speak reply via TTS API kalau voice enabled
+      // Speak reply via n8n Edge TTS (streaming) + fallback Web Speech
       if (settings.voiceEnabled) {
         try {
-          const replyGender = data.agent?.voiceGender || "male";
-          const ttsRes = await fetch("/api/ai/tts", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ text: reply.slice(0, 200) }),
-          });
-          if (ttsRes.ok) {
-            const blob = await ttsRes.blob();
-            const audioUrl = URL.createObjectURL(blob);
-            const audio = new Audio(audioUrl);
-            audio.playbackRate = replyGender === "female" ? 1.0 : (replyGender === "neutral" ? 0.92 : 0.85);
-            audio.onended = () => URL.revokeObjectURL(audioUrl);
-            await audio.play();
-          }
-        } catch {}
+          const replyVoice = data.agent?.voiceGender === "female" ? "id-ID-GadisNeural" : "id-ID-ArdiNeural";
+          const n8nBase = settings.n8nBaseUrl || "https://artha.loophole.site";
+          const audioUrl = `${n8nBase}/webhook/tts-gateway?text=${encodeURIComponent(reply.slice(0, 200))}&voice=${replyVoice}`;
+          const audio = new Audio(audioUrl);
+          audio.onended = () => {};
+          audio.onerror = () => {
+            // Fallback ke Web Speech API
+            try {
+              if (typeof window !== "undefined" && "speechSynthesis" in window) {
+                window.speechSynthesis.cancel();
+                const utter = new SpeechSynthesisUtterance(reply.slice(0, 500));
+                utter.lang = "id-ID";
+                utter.rate = data.agent?.voiceRate ?? 1;
+                utter.pitch = data.agent?.voicePitch ?? 1;
+                window.speechSynthesis.speak(utter);
+              }
+            } catch {}
+          };
+          await audio.play();
+        } catch {
+          // Fallback ke Web Speech API
+          try {
+            if (typeof window !== "undefined" && "speechSynthesis" in window) {
+              window.speechSynthesis.cancel();
+              const utter = new SpeechSynthesisUtterance(reply.slice(0, 500));
+              utter.lang = "id-ID";
+              utter.rate = data.agent?.voiceRate ?? 1;
+              utter.pitch = data.agent?.voicePitch ?? 1;
+              window.speechSynthesis.speak(utter);
+            }
+          } catch {}
+        }
       }
 
       // Update messages store supaya kalau drawer dibuka pesannya ada
