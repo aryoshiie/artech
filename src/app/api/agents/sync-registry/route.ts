@@ -1,7 +1,4 @@
 // src/app/api/agents/sync-registry/route.ts
-// Sinkronisasi data Agent (nama, role, desc, isActive) ke schema "Artha" di Supabase
-// agar workflow n8n Artha bisa baca daftar agent terbaru otomatis.
-
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 
@@ -9,53 +6,55 @@ export const runtime = "nodejs";
 
 export async function POST(_req: NextRequest) {
   try {
-    // 1. Baca semua agent aktif dari schema Artech
     const agents = await db.agent.findMany({
-      where: { isActive: true },
-      select: {
-        id: true,
-        name: true,
-        role: true,
-        desc: true,
-        isActive: true,
-      },
+      select: { id: true, name: true, role: true, desc: true, systemPrompt: true, userPrompt: true, isActive: true },
     });
 
-    // 2. Kirim data ke schema Artha (tabel Agent Registry)
-    // Karena Prisma tidak bisa cross-schema upsert langsung,
-    // kita pakai $executeRaw untuk UPSERT ke tabel "Agent Registry" schema Artha
-    // Asumsi tabel "Agent Registry" sudah ada di schema Artha dengan kolom: id, name, role, description, is_active
-    
-    // Hapus data lama dulu (opsional, bisa diubah jadi UPSERT)
-    await db.$executeRaw`DELETE FROM artha."Agent Registry";`;
+    let registryCount = 0;
+    let promptCount = 0;
 
-    // Insert data baru
     for (const agent of agents) {
-      await db.$executeRaw`
-        INSERT INTO artha."Agent Registry" (id, name, role, description, is_active)
-        VALUES (${agent.id}, ${agent.name}, ${agent.role}, ${agent.desc}, ${agent.isActive})
-        ON CONFLICT (id) DO UPDATE SET
-          name = EXCLUDED.name,
-          role = EXCLUDED.role,
-          description = EXCLUDED.description,
-          is_active = EXCLUDED.is_active;
-      `;
+      try {
+        await db.$executeRaw`
+          INSERT INTO public.agent_registry (name, role, description, status)
+          VALUES (${agent.name}, ${agent.role}, ${agent.desc}, ${agent.isActive})
+          ON CONFLICT (name) DO UPDATE SET
+            role = EXCLUDED.role,
+            description = EXCLUDED.description,
+            status = EXCLUDED.status,
+            updated_at = NOW();
+        `;
+        registryCount++;
+      } catch (e) {
+        console.error(`[Sync Registry] Gagal sync ${agent.name}:`, e);
+      }
+
+      if (agent.systemPrompt) {
+        try {
+          await db.$executeRaw`
+            INSERT INTO public.prompt_library (agent_name, role, system_prompt, user_prompt)
+            VALUES (${agent.name}, ${agent.role}, ${agent.systemPrompt}, ${agent.userPrompt || ""})
+            ON CONFLICT (agent_name) DO UPDATE SET
+              role = EXCLUDED.role,
+              system_prompt = EXCLUDED.system_prompt,
+              user_prompt = EXCLUDED.user_prompt,
+              updated_at = NOW();
+          `;
+          promptCount++;
+        } catch (e) {
+          console.error(`[Sync Prompt] Gagal sync ${agent.name}:`, e);
+        }
+      }
     }
 
     return NextResponse.json({
       success: true,
-      synced: agents.length,
-      message: `Berhasil sync ${agents.length} agent ke schema Artha (Agent Registry)`,
+      message: `Sync selesai! ${registryCount} agent_registry + ${promptCount} prompt_library berhasil diupdate.`,
+      registryCount,
+      promptCount,
     });
   } catch (err: any) {
     console.error("[API POST /agents/sync-registry]", err);
-    return NextResponse.json(
-      {
-        error: "Gagal sync ke Agent Registry",
-        details: err?.message || String(err),
-        note: "Pastikan tabel 'Agent Registry' sudah ada di schema 'artha' Supabase Anda dengan kolom: id, name, role, description, is_active",
-      },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Gagal sync", details: err?.message || String(err) }, { status: 500 });
   }
 }

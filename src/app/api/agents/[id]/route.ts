@@ -55,6 +55,9 @@ export async function PATCH(
       voiceGender: true,
       voiceName: true,
       webhookUrl: true,
+      systemPrompt: true,
+      userPrompt: true,
+      isActive: true,
       workflowId: true,
     };
 

@@ -1,16 +1,14 @@
-// Artech Orchestrator — Prisma schema (PRODUCTION: PostgreSQL Supabase)
-// Original: SQLite (sandbox demo) — restored to PostgreSQL for Vercel deploy
+// Artech Orchestrator — Prisma schema (SQLite adapted for sandbox)
+// Original: PostgreSQL (Supabase) with multiSchema
+// Adapted: SQLite (single schema, no @schema attributes)
 
 generator client {
-  provider        = "prisma-client-js"
-  previewFeatures = ["multiSchema"]
+  provider = "prisma-client-js"
 }
 
 datasource db {
-  provider  = "postgresql"
-  url       = env("DATABASE_URL")
-  directUrl = env("DIRECT_URL")
-  schemas   = ["artech"]
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
 }
 
 // =============== ENUMS ===============
@@ -19,15 +17,11 @@ enum MessageRole {
   user
   agent
   system
-
-  @@schema("artech")
 }
 
 enum SessionMode {
   default
   bypass
-
-  @@schema("artech")
 }
 
 enum SessionStatus {
@@ -36,8 +30,6 @@ enum SessionStatus {
   ended_user
   ended_idle
   ended_error
-
-  @@schema("artech")
 }
 
 enum ExecutionStatus {
@@ -46,8 +38,6 @@ enum ExecutionStatus {
   success
   error
   timeout
-
-  @@schema("artech")
 }
 
 // =============== MODELS ===============
@@ -76,6 +66,9 @@ model Agent {
   voiceName        String?
 
   webhookUrl       String?
+  systemPrompt     String?
+  userPrompt       String?
+  isActive         Boolean   @default(true)
   workflowId       String?
 
   xp               Int      @default(0)
@@ -91,7 +84,6 @@ model Agent {
 
   @@index([isCore])
   @@index([orchestratorOrder])
-  @@schema("artech")
 }
 
 model Tool {
@@ -109,7 +101,6 @@ model Tool {
   createdAt DateTime @default(now())
 
   @@index([agentId])
-  @@schema("artech")
 }
 
 model Message {
@@ -120,12 +111,11 @@ model Message {
   session   Session?    @relation(fields: [sessionId], references: [id], onDelete: SetNull)
   role      MessageRole
   text      String?
-  files     Json?
+  files     String?
   createdAt DateTime    @default(now())
 
   @@index([agentId, createdAt])
   @@index([sessionId])
-  @@schema("artech")
 }
 
 model Session {
@@ -147,7 +137,6 @@ model Session {
 
   @@index([status])
   @@index([activeAgentId])
-  @@schema("artech")
 }
 
 model AgentExecution {
@@ -159,8 +148,8 @@ model AgentExecution {
   workflowId  String?
 
   status      ExecutionStatus  @default(pending)
-  input       Json?
-  output      Json?
+  input       String?
+  output      String?
   error       String?
 
   startedAt   DateTime         @default(now())
@@ -170,7 +159,6 @@ model AgentExecution {
   @@index([agentId, startedAt])
   @@index([sessionId])
   @@index([status])
-  @@schema("artech")
 }
 
 model Settings {
@@ -185,8 +173,6 @@ model Settings {
   sessionIdleTimeoutMin Int      @default(30)
   ownerNotifyWebhook    String?
   updatedAt             DateTime @updatedAt
-
-  @@schema("artech")
 }
 
 model User {
@@ -198,8 +184,6 @@ model User {
   passkeys     Passkey[]
   sessions     AuthSession[]
   accessLogs   AccessLog[]
-
-  @@schema("artech")
 }
 
 model Passkey {
@@ -215,7 +199,6 @@ model Passkey {
   lastUsedAt      DateTime?
 
   @@index([userId])
-  @@schema("artech")
 }
 
 model AuthSession {
@@ -230,7 +213,6 @@ model AuthSession {
 
   @@index([userId])
   @@index([expiresAt])
-  @@schema("artech")
 }
 
 model AccessLog {
@@ -240,10 +222,9 @@ model AccessLog {
   event       String
   ipAddress   String?
   userAgent   String?
-  metadata    Json?
+  metadata    String?
   createdAt   DateTime @default(now())
 
   @@index([userId, createdAt])
   @@index([event, createdAt])
-  @@schema("artech")
 }

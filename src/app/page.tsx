@@ -8,7 +8,7 @@ import {
   Settings, Send, Paperclip, X, Volume2, VolumeX, Power,
   Loader2, CheckCircle2, AlertCircle,
   Trash2, FileText, File as FileIcon, Menu, Orbit, Plus, Pencil,
-  MessageCircle, ChevronLeft, Copy, KeyRound, Fingerprint,
+  MessageCircle, ChevronLeft, Copy, KeyRound, Fingerprint, LogOut,
 } from "lucide-react";
 
 /* ------------------------------------------------------------------ */
@@ -386,7 +386,7 @@ function selfSpinSeconds(id: string, min = 9, max = 21): number {
  */
 function ArcReactorPlanet({ seed, color, glow, name, speaking }: { seed: string; color: string; glow: string; name: string; speaking?: boolean }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const nameRef = useRef<HTMLDivElement>(null);
+  const imgRef = useRef<HTMLImageElement | null>(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -394,61 +394,26 @@ function ArcReactorPlanet({ seed, color, glow, name, speaking }: { seed: string;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    const rnd = seededRandom(seed);
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.src = "/earth-nasa.jpg";
+    imgRef.current = img;
 
-    // Pre-generate particle layers (deterministic per seed)
-    // Layer 1: core dust — padat di pusat
-    const coreDust = Array.from({ length: 70 }).map(() => ({
-      angle: rnd() * Math.PI * 2,
-      radius: rnd() * 11,
-      size: 0.4 + rnd() * 0.7,
-      speed: 0.2 + rnd() * 0.4,
-      op: 0.45 + rnd() * 0.5,
+    const rnd = seededRandom(seed);
+    const clouds = Array.from({ length: 50 }).map(() => ({
+      lon: rnd() * Math.PI * 2,
+      lat: (rnd() - 0.5) * Math.PI * 0.8,
+      size: 2 + rnd() * 4,
+      op: 0.2 + rnd() * 0.3,
     }));
-    // Layer 2: inner glow ring — band ketat
-    const innerRing = Array.from({ length: 54 }).map(() => ({
-      angle: rnd() * Math.PI * 2,
-      radius: 17 + rnd() * 3,
-      size: 0.6 + rnd() * 0.7,
-      op: 0.5 + rnd() * 0.4,
-    }));
-    // Layer 3: main wavy band — band tebal berosilasi (fitur utama Arc Reactor)
-    const waveBand = Array.from({ length: 150 }).map(() => ({
-      angle: rnd() * Math.PI * 2,
-      baseRadius: 27 + rnd() * 8,
-      waveAmp: 2 + rnd() * 4,
-      waveFreq: 3 + Math.floor(rnd() * 4),
-      wavePhase: rnd() * Math.PI * 2,
-      size: 0.5 + rnd() * 0.9,
-      op: 0.4 + rnd() * 0.5,
-    }));
-    // Layer 4: outer halo — sparse
-    const outerHalo = Array.from({ length: 90 }).map(() => ({
-      angle: rnd() * Math.PI * 2,
-      radius: 41 + rnd() * 5,
-      size: 0.4 + rnd() * 0.5,
-      op: 0.2 + rnd() * 0.35,
-      speed: 0.1 + rnd() * 0.2,
-    }));
-    // Layer 5: ambient dust — sangat sparse di tepi
-    const ambient = Array.from({ length: 26 }).map(() => ({
-      angle: rnd() * Math.PI * 2,
-      radius: 46 + rnd() * 2.5,
-      size: 0.3 + rnd() * 0.4,
-      op: 0.15 + rnd() * 0.2,
-    }));
-    // Titik terang berkedip (sparkle)
-    const sparkles = Array.from({ length: 8 }).map(() => ({
-      angle: rnd() * Math.PI * 2,
-      radius: 20 + rnd() * 22,
-      size: 1.2 + rnd() * 1.0,
-      op: 0.6 + rnd() * 0.4,
-      phase: rnd() * Math.PI * 2,
-      speed: 1.5 + rnd() * 2,
+    const stars = Array.from({ length: 80 }).map(() => ({
+      x: rnd(), y: rnd(), size: 0.3 + rnd() * 0.8, op: 0.3 + rnd() * 0.5, phase: rnd() * Math.PI * 2,
     }));
 
     let raf = 0;
-    let t0 = performance.now();
+    const t0 = performance.now();
+    let imgLoaded = false;
+    img.onload = () => { imgLoaded = true; };
 
     function resize() {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -467,112 +432,132 @@ function ArcReactorPlanet({ seed, color, glow, name, speaking }: { seed: string;
       const w = rect.width, h = rect.height;
       if (w < 1 || h < 1) { raf = requestAnimationFrame(draw); return; }
       const cx = w / 2, cy = h / 2;
-      const scale = Math.max(0.5, Math.min(w, h) / 100);
+      const radius = Math.max(1, Math.min(w, h) * 0.38);
       const time = (now - t0) * 0.001;
 
       ctx.clearRect(0, 0, w, h);
-      ctx.globalCompositeOperation = "lighter"; // additive blending → glow intens
 
-      const drawParticle = (x: number, y: number, sz: number, col: string, op: number) => {
-        const r = Math.max(0.15, sz * scale);
+      // Stars
+      for (const s of stars) {
+        const sx = s.x * w, sy = s.y * h;
+        const dx = sx - cx, dy = sy - cy;
+        if (dx * dx + dy * dy < radius * radius * 1.2) continue;
+        const twinkle = 0.5 + 0.5 * Math.sin(time * 2 + s.phase);
+        ctx.fillStyle = `rgba(255,255,255,${s.op * twinkle})`;
         ctx.beginPath();
-        ctx.arc(x, y, r, 0, Math.PI * 2);
-        ctx.fillStyle = col;
-        ctx.globalAlpha = op;
-        ctx.shadowBlur = r * 3;
-        ctx.shadowColor = col;
+        ctx.arc(sx, sy, s.size, 0, Math.PI * 2);
         ctx.fill();
-      };
-
-      // Layer 1: core dust (rotasi lambat searah jarum jam)
-      const coreRot = time * 0.3;
-      for (const p of coreDust) {
-        const a = p.angle + coreRot * p.speed;
-        const r = p.radius * scale;
-        drawParticle(cx + Math.cos(a) * r, cy + Math.sin(a) * r, p.size, glow, p.op);
       }
 
-      // Layer 2: inner glow ring (rotasi berlawanan)
-      const innerRot = -time * 0.4;
-      for (const p of innerRing) {
-        const a = p.angle + innerRot;
-        const r = p.radius * scale;
-        drawParticle(cx + Math.cos(a) * r, cy + Math.sin(a) * r, p.size, glow, p.op);
+      // Atmosphere glow (visualizer — pulse saat speaking)
+      const speakPulse = speaking ? (0.6 + 0.4 * Math.sin(time * 4)) : 1.0;
+      const atmosIntensity = speaking ? 1.5 : 1.0;
+      const atmosGrad = ctx.createRadialGradient(cx, cy, radius * 0.95, cx, cy, radius * 1.3);
+      atmosGrad.addColorStop(0, `rgba(100, 180, 255, 0.0)`);
+      atmosGrad.addColorStop(0.4, `rgba(100, 180, 255, ${0.3 * atmosIntensity * speakPulse})`);
+      atmosGrad.addColorStop(1, `rgba(100, 180, 255, 0.0)`);
+      ctx.fillStyle = atmosGrad;
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius * 1.3 * (speaking ? 1 + 0.05 * speakPulse : 1), 0, Math.PI * 2);
+      ctx.fill();
+
+      if (speaking) {
+        const auraAlpha = Math.floor(80 + 100 * speakPulse).toString(16).padStart(2, "0");
+        ctx.strokeStyle = `${glow}${auraAlpha}`;
+        ctx.lineWidth = 2 + speakPulse * 2;
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius * (1.05 + 0.03 * speakPulse), 0, Math.PI * 2);
+        ctx.stroke();
       }
 
-      // Layer 3: main wavy band (fitur utama — gelombang sinusoidal)
-      const waveRot = time * 0.25;
-      for (const p of waveBand) {
-        const a = p.angle + waveRot;
-        const r = (p.baseRadius + p.waveAmp * Math.sin(a * p.waveFreq + p.wavePhase + time * 2)) * scale;
-        drawParticle(cx + Math.cos(a) * r, cy + Math.sin(a) * r, p.size, color, p.op);
+      // Earth sphere
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+      ctx.clip();
+
+      if (imgLoaded && imgRef.current) {
+        const rotationSpeed = (1 / 60);
+        const rotation = (time * rotationSpeed) % 1;
+        const imgW = imgRef.current.naturalWidth;
+        const imgH = imgRef.current.naturalHeight;
+        const cropTop = 0, cropBottom = 1.0;
+        const cropH = imgH * (cropBottom - cropTop);
+        const drawW = radius * 2.2, drawH = radius * 2.2;
+        const offsetX = -rotation * drawW;
+        for (let i = -1; i <= 1; i++) {
+          ctx.drawImage(imgRef.current, 0, imgH * cropTop, imgW, cropH, cx - drawW / 2 + offsetX + i * drawW, cy - drawH / 2, drawW, drawH);
+        }
+      } else {
+        const oceanGrad = ctx.createRadialGradient(cx - radius * 0.3, cy - radius * 0.3, radius * 0.1, cx, cy, radius);
+        oceanGrad.addColorStop(0, "#1a5a8a"); oceanGrad.addColorStop(0.5, "#0f3d6b"); oceanGrad.addColorStop(1, "#06203f");
+        ctx.fillStyle = oceanGrad;
+        ctx.fillRect(cx - radius, cy - radius, radius * 2, radius * 2);
       }
 
-      // Layer 4: outer halo (sangat lambat)
-      const haloRot = time * 0.15;
-      for (const p of outerHalo) {
-        const a = p.angle + haloRot * p.speed;
-        const r = p.radius * scale;
-        drawParticle(cx + Math.cos(a) * r, cy + Math.sin(a) * r, p.size, color, p.op * 0.7);
+      // Clouds
+      const cloudRotationSpeed = (1 / 60) * 0.7;
+      const cloudRotation = (time * cloudRotationSpeed) % 1;
+      const cloudOffsetX = -cloudRotation * radius * 2.2;
+      ctx.globalAlpha = 0.4;
+      for (let i = -1; i <= 1; i++) {
+        for (const c of clouds) {
+          const px = cx + (c.lon / (Math.PI * 2)) * radius * 2.2 + cloudOffsetX + i * radius * 2.2;
+          const py = cy + c.lat * radius * 0.5;
+          const dx = px - cx, dy = py - cy;
+          if (dx * dx + dy * dy > radius * radius) continue;
+          ctx.fillStyle = `rgba(255,255,255,${c.op})`;
+          ctx.beginPath();
+          ctx.arc(px, py, c.size, 0, Math.PI * 2);
+          ctx.fill();
+        }
       }
-
-      // Layer 5: ambient dust
-      for (const p of ambient) {
-        const a = p.angle + time * 0.1;
-        const r = p.radius * scale;
-        drawParticle(cx + Math.cos(a) * r, cy + Math.sin(a) * r, p.size, glow, p.op);
-      }
-
-      // Sparkles (titik terang berkedip)
-      for (const p of sparkles) {
-        const a = p.angle + time * 0.2;
-        const r = p.radius * scale;
-        const flicker = 0.5 + 0.5 * Math.sin(time * p.speed + p.phase);
-        drawParticle(cx + Math.cos(a) * r, cy + Math.sin(a) * r, p.size, glow, p.op * flicker);
-      }
-
-      ctx.globalCompositeOperation = "source-over";
       ctx.globalAlpha = 1;
-      ctx.shadowBlur = 0;
+
+      // Day/night
+      const sunAngle = Math.PI * 0.3;
+      const nightGrad = ctx.createLinearGradient(cx + Math.cos(sunAngle) * radius, cy + Math.sin(sunAngle) * radius, cx - Math.cos(sunAngle) * radius, cy - Math.sin(sunAngle) * radius);
+      nightGrad.addColorStop(0, "rgba(0,0,0,0)"); nightGrad.addColorStop(0.5, "rgba(0,0,0,0)"); nightGrad.addColorStop(0.75, "rgba(0,0,20,0.5)"); nightGrad.addColorStop(1, "rgba(0,0,20,0.9)");
+      ctx.fillStyle = nightGrad;
+      ctx.fillRect(cx - radius, cy - radius, radius * 2, radius * 2);
+
+      // Specular
+      const specGrad = ctx.createRadialGradient(cx - radius * 0.35, cy - radius * 0.35, 0, cx - radius * 0.35, cy - radius * 0.35, radius * 0.6);
+      specGrad.addColorStop(0, "rgba(255,255,255,0.12)"); specGrad.addColorStop(1, "rgba(255,255,255,0)");
+      ctx.fillStyle = specGrad;
+      ctx.fillRect(cx - radius, cy - radius, radius * 2, radius * 2);
+
+      // Edge darkening
+      const edgeGrad = ctx.createRadialGradient(cx, cy, radius * 0.7, cx, cy, radius);
+      edgeGrad.addColorStop(0, "rgba(0,0,0,0)"); edgeGrad.addColorStop(1, "rgba(0,0,0,0.5)");
+      ctx.fillStyle = edgeGrad;
+      ctx.fillRect(cx - radius, cy - radius, radius * 2, radius * 2);
+
+      ctx.restore();
+
+      // Outer ring
+      ctx.strokeStyle = `${color}66`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius + 2, 0, Math.PI * 2);
+      ctx.stroke();
 
       raf = requestAnimationFrame(draw);
     }
 
     raf = requestAnimationFrame(draw);
-    return () => {
-      cancelAnimationFrame(raf);
-      ro.disconnect();
-    };
-  }, [seed, color, glow]);
-
-  // Pisah nama jadi baris-baris agar muat di lingkaran (max 2-3 baris)
-  const nameWords = (name || "").trim().split(/\s+/);
-  const nameLines: string[] = [];
-  if (nameWords.length === 1) {
-    nameLines.push(nameWords[0]);
-  } else if (nameWords.length === 2) {
-    nameLines.push(nameWords[0], nameWords[1]);
-  } else {
-    // gabungkan menjadi 2 baris
-    const mid = Math.ceil(nameWords.length / 2);
-    nameLines.push(nameWords.slice(0, mid).join(" "), nameWords.slice(mid).join(" "));
-  }
+    return () => { cancelAnimationFrame(raf); ro.disconnect(); };
+  }, [seed, color, glow, speaking]);
 
   return (
-    <div className="arc-reactor-planet" aria-hidden="true">
+    <div className="arc-reactor-planet earth-globe" aria-hidden="true">
       <canvas ref={canvasRef} className="arc-reactor-canvas" />
-      {/* Cincin tipis statis untuk border hologram */}
       <span className="arc-reactor-ring" style={{ borderColor: `${color}55` }} />
-      {/* Nama agent dinamis di pusat (tanpa shadow/glow) */}
-      <div ref={nameRef} className="arc-reactor-name font-display" style={{ color: "#ffffff" }}>
-        {nameLines.map((ln, i) => (
-          <span key={i} className="arc-reactor-name-line">{ln}</span>
-        ))}
-      </div>
       {speaking && <span className="arc-reactor-pulse" style={{ borderColor: `${glow}88` }} />}
     </div>
   );
 }
+
 
 /* ------------------------------------------------------------------ */
 /*  ORBIT VIEW — sistem tata surya + toggle popup per planet           */
@@ -886,6 +871,44 @@ interface HoloDrawerProps {
   webhookConfigured: boolean;
   onRename: (id: string) => void;
   onToggleVoice: () => void;
+}
+
+function SyncRegistryButton({ onToast }: { onToast: (s: any) => void }) {
+  const [syncing, setSyncing] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+
+  async function handleSync() {
+    setSyncing(true);
+    setResult(null);
+    try {
+      const res = await fetch("/api/agents/sync-registry", { method: "POST" });
+      const data = await res.json();
+      if (res.ok) {
+        setResult(`✅ ${data.message}`);
+      } else {
+        setResult(`❌ ${data.error || "Gagal sync"}`);
+      }
+    } catch (e: any) {
+      setResult(`❌ Error: ${e.message}`);
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  return (
+    <div>
+      <button
+        className="btn font-mono"
+        onClick={handleSync}
+        disabled={syncing}
+        style={{ background: "rgba(94,234,212,0.1)", borderColor: "rgba(94,234,212,0.4)", color: "#5eead4" }}
+      >
+        {syncing ? <Loader2 size={14} className="spin-icon" /> : <Orbit size={14} />}
+        {syncing ? "Menyinkronkan..." : "Sync ke n8n Registry"}
+      </button>
+      {result && <p className="font-mono" style={{ fontSize: 11, marginTop: 8, color: result.startsWith("✅") ? "#5eead4" : "#ff8080" }}>{result}</p>}
+    </div>
+  );
 }
 
 function HoloDrawer({
@@ -1234,6 +1257,17 @@ function SettingsModal({ settings, onChange, onClose, onTest, testState, onReset
         {testState === "ok" && <p className="font-mono" style={{ color: "#5eead4", fontSize: 12 }}>Terhubung — workflow merespons.</p>}
         {testState === "fail" && <p className="font-mono" style={{ color: "#ff8080", fontSize: 12 }}>Gagal terhubung. Periksa URL dan CORS di n8n.</p>}
 
+        {/* SYNC AGENT REGISTRY */}
+        <div style={{ marginTop: 18, paddingTop: 14, borderTop: "1px solid rgba(255,255,255,0.08)" }}>
+          <div className="font-display" style={{ fontSize: 13, marginBottom: 4, display: "flex", alignItems: "center", gap: 6 }}>
+            <Orbit size={14} /> Sinkronisasi n8n (Agent Registry)
+          </div>
+          <p className="field-hint font-mono" style={{ marginBottom: 10 }}>
+            Sync data agent ke schema public Supabase. Jalankan setelah edit agent agar workflow n8n membaca daftar agent terbaru.
+          </p>
+          <SyncRegistryButton onToast={onChange} />
+        </div>
+
         {/* KEAMANAN — Manajemen Passkey (WebAuthn) */}
         <div style={{ marginTop: 18, paddingTop: 14, borderTop: "1px solid rgba(255,255,255,0.08)" }}>
           <div className="font-display" style={{ fontSize: 13, marginBottom: 4, display: "flex", alignItems: "center", gap: 6 }}>
@@ -1530,28 +1564,31 @@ function RenameAgentModal({ body, onClose, onRename, voices }: RenameAgentModalP
     ? voices.filter((v) => guessVoiceGender(v) === voiceGender)
     : voices;
 
-  function testVoice() {
-    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+  async function testVoice() {
     try {
-      window.speechSynthesis.cancel();
-      const utter = new SpeechSynthesisUtterance(`Halo, saya ${name || body?.name}.`);
-      utter.lang = "id-ID";
-      utter.rate = voiceRate;
-      utter.pitch = voicePitch;
-      // Pilih voice
-      let chosen: SpeechSynthesisVoice | null = null;
-      if (voiceName) {
-        chosen = voices.find((v) => v.name === voiceName || v.voiceURI === voiceName) || null;
+      setTesting(true);
+      const gender = voiceGender || "male";
+      const res = await fetch("/api/ai/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: `Halo, saya ${name || body?.name}.`, gender }),
+      });
+      if (res.ok) {
+        const blob = await res.blob();
+        const audioUrl = URL.createObjectURL(blob);
+        const audio = new Audio(audioUrl);
+        audio.onended = () => {
+          setTesting(false);
+          URL.revokeObjectURL(audioUrl);
+        };
+        audio.onerror = () => setTesting(false);
+        await audio.play();
+      } else {
+        setTesting(false);
       }
-      if (!chosen) {
-        chosen = pickVoiceByGender(voices, voiceGender);
-      }
-      if (chosen) utter.voice = chosen;
-      utter.onstart = () => setTesting(true);
-      utter.onend = () => setTesting(false);
-      utter.onerror = () => setTesting(false);
-      window.speechSynthesis.speak(utter);
-    } catch (e) { /* ignore */ }
+    } catch {
+      setTesting(false);
+    }
   }
 
   return (
@@ -1668,6 +1705,82 @@ function RenameAgentModal({ body, onClose, onRename, voices }: RenameAgentModalP
           </p>
         </div>
         {/* ===== END N8N WEBHOOK SECTION ===== */}
+
+        {/* ===== N8N WEBHOOK SECTION — connect ke workflow n8n per agent ===== */}
+        <div className="color-section">
+          <div className="color-section-title font-display">
+            <span className="color-preview-dot" style={{ background: webhookUrl ? "#5eead4" : "#8683a1", boxShadow: webhookUrl ? `0 0 10px #5eead4` : "none" }} />
+            Koneksi n8n Workflow
+          </div>
+          <label className="field-label font-mono">Webhook URL (opsional — kosongkan jika tidak pakai n8n)</label>
+          <input
+            className="text-input font-mono"
+            value={webhookUrl}
+            onChange={(e) => setWebhookUrl(e.target.value)}
+            placeholder={`https://your-n8n.com/webhook/agent-${body?.id || "xxx"}`}
+            style={{ fontSize: 11 }}
+          />
+          <p className="field-hint font-mono">
+            {webhookUrl
+              ? "✅ Mode n8n: pesan akan dikirim ke webhook ini."
+              : "ℹ️ Agent belum dikonfigurasi. Set webhook URL untuk connect ke workflow n8n Anda."}
+          </p>
+        </div>
+        {/* ===== END N8N WEBHOOK SECTION ===== */}
+
+        {/* ===== PROMPT CONFIGURATION SECTION (CMS for n8n) ===== */}
+        <div className="voice-section">
+          <div className="voice-section-title font-display">
+            <Settings size={14} /> Konfigurasi Prompt (CMS)
+          </div>
+
+          <div className="toggle-row" style={{ marginBottom: 14 }}>
+            <div>
+              <div className="font-display" style={{ fontSize: 13 }}>Status Agent</div>
+              <div className="field-hint font-mono">Jika OFF, agent tidak akan dipanggil oleh Jarvis di n8n.</div>
+            </div>
+            <button
+              type="button"
+              className={`switch ${isActive ? "switch-on" : ""}`}
+              onClick={() => setIsActive(!isActive)}
+              aria-label="Toggle status agent"
+            >
+              <span className="switch-knob" />
+            </button>
+          </div>
+
+          <label className="field-label font-mono">Deskripsi Singkat (Tugas Agent)</label>
+          <textarea
+            className="text-input font-mono"
+            value={desc}
+            onChange={(e) => setDesc(e.target.value)}
+            rows={2}
+            style={{ resize: "vertical", fontFamily: "inherit", minHeight: 40 }}
+            placeholder="Misal: Menangani riset pasar dan analisis data kompetitor."
+          />
+
+          <label className="field-label font-mono">System Prompt</label>
+          <textarea
+            className="text-input font-mono"
+            value={systemPrompt}
+            onChange={(e) => setSystemPrompt(e.target.value)}
+            rows={6}
+            style={{ resize: "vertical", fontFamily: "inherit", minHeight: 100 }}
+            placeholder="Kamu adalah Karen, Research Specialist Artech..."
+          />
+
+          <label className="field-label font-mono">User Prompt (Template)</label>
+          <textarea
+            className="text-input font-mono"
+            value={userPrompt}
+            onChange={(e) => setUserPrompt(e.target.value)}
+            rows={6}
+            style={{ resize: "vertical", fontFamily: "inherit", minHeight: 100 }}
+            placeholder="=== DATA ===&#10;[DATA]&#10;&#10;=== INSTRUKSI ===&#10;[CMD]"
+          />
+          <p className="field-hint font-mono">Placeholder: [MEM], [DATA], [CMD], [MODE], [AGENT_LIST]</p>
+        </div>
+        {/* ===== END PROMPT CONFIGURATION SECTION ===== */}
 
         {/* ===== VOICE SETTINGS SECTION ===== */}
         <div className="voice-section">
@@ -2017,31 +2130,43 @@ export default function ArtechOrchestrator() {
 
   const getBody = useCallback((id: string | null) => allBodies.find((b) => b.id === id) || null, [allBodies]);
 
-  /* ---- TTS dengan voice per-agent (gender + pitch + rate) ---- */
-  const speak = useCallback((body: Agent, text: string) => {
+  /* ---- TTS dengan Edge TTS (Microsoft Neural Voice, natural) ---- */
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const speak = useCallback(async (body: Agent, text: string) => {
     if (!settings.voiceEnabled) return;
-    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+    if (!text || text.trim().length === 0) return;
     try {
-      window.speechSynthesis.cancel();
-      const utter = new SpeechSynthesisUtterance(text);
-      utter.lang = "id-ID";
-      utter.rate = body.voiceRate || 1;
-      utter.pitch = body.voicePitch || 1;
-      // Voice selection per agent: voiceName explicit > gender-based > fallback
-      const allVoices = window.speechSynthesis.getVoices();
-      let chosen: SpeechSynthesisVoice | null = null;
-      if (body.voiceName) {
-        chosen = allVoices.find((v) => v.name === body.voiceName || v.voiceURI === body.voiceName) || null;
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.src = "";
       }
-      if (!chosen) {
-        chosen = pickVoiceByGender(allVoices, body.voiceGender);
+      setSpeakingId(body.id);
+      const gender = body.voiceGender || "male";
+      const res = await fetch("/api/ai/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: text.slice(0, 500), gender }),
+      });
+      if (!res.ok) {
+        setSpeakingId(null);
+        return;
       }
-      if (chosen) utter.voice = chosen;
-      utter.onstart = () => setSpeakingId(body.id);
-      utter.onend = () => setSpeakingId(null);
-      utter.onerror = () => setSpeakingId(null);
-      window.speechSynthesis.speak(utter);
-    } catch (e) { /* speech tidak tersedia */ }
+      const blob = await res.blob();
+      const audioUrl = URL.createObjectURL(blob);
+      const audio = new Audio(audioUrl);
+      audioRef.current = audio;
+      audio.onended = () => {
+        setSpeakingId(null);
+        URL.revokeObjectURL(audioUrl);
+      };
+      audio.onerror = () => {
+        setSpeakingId(null);
+        URL.revokeObjectURL(audioUrl);
+      };
+      await audio.play();
+    } catch {
+      setSpeakingId(null);
+    }
   }, [settings.voiceEnabled]);
 
   /* ---- files ---- */
@@ -2215,6 +2340,7 @@ export default function ArtechOrchestrator() {
   const handleRenameAgent = useCallback(async (agentId: string, data: {
     name: string; role: string; desc: string; color: string; glow: string; webhookUrl?: string | null;
     voicePitch?: number; voiceRate?: number; voiceGender?: string; voiceName?: string | null;
+    systemPrompt?: string | null; userPrompt?: string | null; isActive?: boolean;
   }) => {
     try {
       const res = await fetch(`/api/agents/${agentId}`, {
@@ -3145,6 +3271,20 @@ export default function ArtechOrchestrator() {
           </button>
           <button className="icon-btn" onClick={() => setSettingsOpen(true)} title="Pengaturan" aria-label="Pengaturan">
             <Settings size={16} />
+          </button>
+          <button
+            className="icon-btn"
+            onClick={async () => {
+              if (!confirm("Logout dari dashboard?")) return;
+              try {
+                await fetch("/api/auth/logout", { method: "POST" });
+              } catch {}
+              window.location.href = "/login";
+            }}
+            title="Logout"
+            aria-label="Logout"
+          >
+            <LogOut size={16} />
           </button>
         </div>
         </div>
