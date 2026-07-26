@@ -483,8 +483,12 @@ function ArcReactorPlanet({ seed, color, glow, name, speaking }: { seed: string;
         const imgH = imgRef.current.naturalHeight;
         const cropTop = 0, cropBottom = 1.0;
         const cropH = imgH * (cropBottom - cropTop);
-        const drawW = radius * 2.2, drawH = radius * 2.2;
+        // Draw image sebagai seamless horizontal wrap (equirectangular)
+        // Width = 2x diameter, height = diameter (preserve aspect ratio)
+        const drawW = radius * 2;
+        const drawH = radius * 2;
         const offsetX = -rotation * drawW;
+        // Draw 3 copies untuk seamless infinite scroll
         for (let i = -1; i <= 1; i++) {
           ctx.drawImage(imgRef.current, 0, imgH * cropTop, imgW, cropH, cx - drawW / 2 + offsetX + i * drawW, cy - drawH / 2, drawW, drawH);
         }
@@ -1754,16 +1758,6 @@ function RenameAgentModal({ body, onClose, onRename, voices }: RenameAgentModalP
               <span className="switch-knob" />
             </button>
           </div>
-
-          <label className="field-label font-mono">Deskripsi Singkat (Tugas Agent)</label>
-          <textarea
-            className="text-input font-mono"
-            value={desc}
-            onChange={(e) => setDesc(e.target.value)}
-            rows={2}
-            style={{ resize: "vertical", fontFamily: "inherit", minHeight: 40 }}
-            placeholder="Misal: Menangani riset pasar dan analisis data kompetitor."
-          />
 
           <label className="field-label font-mono">System Prompt</label>
           <textarea
@@ -3171,11 +3165,18 @@ export default function ArtechOrchestrator() {
           white-space:nowrap;
         }
         .cr-role-label{
-          position:absolute; bottom:-3.5vmin; left:50%;
+          position:absolute; bottom:-5.5vmin; left:50%;
           transform:translateX(-50%);
           font-size:1.4vmin; letter-spacing:0.25em;
           opacity:0.7;
           white-space:nowrap;
+        }
+        .cr-name-label{
+          position:absolute; bottom:-2.5vmin; left:50%;
+          transform:translateX(-50%);
+          font-size:2.2vmin; letter-spacing:0.15em; font-weight:700;
+          white-space:nowrap;
+          text-shadow:0 0 4px #05060d, 0 1px 6px rgba(0,0,0,0.8);
         }
 
         /* Hamburger button (3-strip menu toggle) */
