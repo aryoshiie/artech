@@ -1587,6 +1587,8 @@ function RenameAgentModal({ body, onClose, onRename, voices }: RenameAgentModalP
         const blob = await res.blob();
         const audioUrl = URL.createObjectURL(blob);
         const audio = new Audio(audioUrl);
+        // Adjust playbackRate for gender simulation
+        audio.playbackRate = gender === "female" ? 1.0 : (gender === "neutral" ? 0.92 : 0.85);
         audio.onended = () => {
           setTesting(false);
           URL.revokeObjectURL(audioUrl);
@@ -2163,6 +2165,9 @@ export default function ArtechOrchestrator() {
       const audioUrl = URL.createObjectURL(blob);
       const audio = new Audio(audioUrl);
       audioRef.current = audio;
+      // Adjust playbackRate for gender simulation
+      // Male = slower (0.85), Female = normal (1.0), Neutral = slightly slower (0.92)
+      audio.playbackRate = gender === "female" ? 1.0 : (gender === "neutral" ? 0.92 : 0.85);
       audio.onended = () => {
         setSpeakingId(null);
         URL.revokeObjectURL(audioUrl);
@@ -2423,15 +2428,23 @@ export default function ArtechOrchestrator() {
       // Auto-hide setelah 12 detik
       setTimeout(() => setVoiceReply(null), 12000);
 
-      // Speak reply via TTS kalau voice enabled
-      if (settings.voiceEnabled && typeof window !== "undefined" && "speechSynthesis" in window) {
+      // Speak reply via TTS API kalau voice enabled
+      if (settings.voiceEnabled) {
         try {
-          window.speechSynthesis.cancel();
-          const utter = new SpeechSynthesisUtterance(reply.slice(0, 500));
-          utter.lang = "id-ID";
-          utter.rate = data.agent?.voiceRate ?? 1;
-          utter.pitch = data.agent?.voicePitch ?? 1;
-          window.speechSynthesis.speak(utter);
+          const replyGender = data.agent?.voiceGender || "male";
+          const ttsRes = await fetch("/api/ai/tts", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text: reply.slice(0, 200) }),
+          });
+          if (ttsRes.ok) {
+            const blob = await ttsRes.blob();
+            const audioUrl = URL.createObjectURL(blob);
+            const audio = new Audio(audioUrl);
+            audio.playbackRate = replyGender === "female" ? 1.0 : (replyGender === "neutral" ? 0.92 : 0.85);
+            audio.onended = () => URL.revokeObjectURL(audioUrl);
+            await audio.play();
+          }
         } catch {}
       }
 
