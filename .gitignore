@@ -55,3 +55,12 @@ server.log
 .next/
 *.db
 .env
+
+# Database & secrets
+*.db
+*.db-*
+.env
+.env.local
+mini-services/agent-core/data/.enc_key
+mini-services/agent-core/data/*.db
+mini-services/agent-core/data/*.db-*

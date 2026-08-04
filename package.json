@@ -6,7 +6,7 @@
     "dev": "(cd mini-services/agent-core && bun index.ts > /tmp/agent-core.log 2>&1 &) && (next dev -p 3000 > /tmp/nextjs.log 2>&1 &) && sleep 2 && tail -f /tmp/nextjs.log",
     "dev:agent-core": "cd mini-services/agent-core && bun --hot index.ts",
     "dev:next": "next dev -p 3000",
-    "build": "next build && cp -r .next/static .next/standalone/.next/ && cp -r public .next/standalone/",
+    "build": "next build",
     "start": "NODE_ENV=production bun .next/standalone/server.js 2>&1 | tee server.log",
     "lint": "eslint .",
     "db:push": "prisma db push --accept-data-loss",
