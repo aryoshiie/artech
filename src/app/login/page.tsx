@@ -24,16 +24,17 @@ export default function LoginPage() {
   useEffect(() => {
     fetch("/api/auth/status")
       .then((r) => r.json())
-      .then((data) => {
-        setSetupComplete(data.setupComplete);
-        setLoggedIn(data.loggedIn);
-        if (data.loggedIn) {
-          router.push("/");
-        } else if (!data.setupComplete) {
-          router.push("/setup");
-        }
-        setChecking(false);
-      })
+      .then(data => {
+  setSetupComplete(data.setupComplete);
+  if (data.loggedIn) {
+    // Sudah login → redirect ke dashboard
+    router.push("/");
+  } else if (!data.setupComplete) {
+    // Setup belum done → redirect ke /setup
+    router.push("/setup");
+  }
+  // else: stay di /login (setupComplete=true, loggedIn=false)
+})
       .catch(() => setChecking(false));
   }, [router]);
 
@@ -110,7 +111,7 @@ export default function LoginPage() {
     );
   }
 
-  if (loggedIn || !setupComplete) {
+  if (loggedIn || (setupComplete && checking)) {
     return (
       <div style={wrapperStyle}>
         <Loader2 size={28} className="spin-icon" color="#5eead4" />
