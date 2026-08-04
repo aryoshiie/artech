@@ -9,7 +9,9 @@ import {
   Loader2, CheckCircle2, AlertCircle,
   Trash2, FileText, File as FileIcon, Menu, Orbit, Plus, Pencil,
   MessageCircle, ChevronLeft, Copy, KeyRound, Fingerprint, LogOut,
+  Play, Activity, Server, Cpu, RefreshCw,
 } from "lucide-react";
+import { RunTaskDialog } from "@/components/run-task-dialog";
 
 /* ------------------------------------------------------------------ */
 /*  TYPES                                                              */
@@ -36,6 +38,16 @@ interface Agent {
   voiceName?: string | null;
   webhookUrl?: string | null;
   workflowId?: string | null;
+  // === agent-core integration fields ===
+  systemPrompt?: string | null;
+  toolWhitelist?: string | null;
+  skillWhitelist?: string | null;
+  memoryScope?: string;
+  slotMode?: string;
+  maxIterations?: number;
+  temperature?: number;
+  enabled?: boolean;
+  requiresToolLoop?: boolean;
   xp: number;
   level: number;
   tools?: Tool[];
@@ -740,9 +752,11 @@ interface RosterProps {
   collapsed: boolean;
   onToggleCollapse: () => void;
   onAddAgent: () => void;
+  onRunTask: (id: string) => void;
+  agentCoreConnected?: boolean;
 }
 
-function Roster({ allBodies, selectedId, onSelect, onEdit, onDelete, connected, collapsed, onToggleCollapse, onAddAgent }: RosterProps) {
+function Roster({ allBodies, selectedId, onSelect, onEdit, onDelete, connected, collapsed, onToggleCollapse, onAddAgent, onRunTask, agentCoreConnected }: RosterProps) {
   return (
     <>
       {/* Floating hamburger button — selalu visible saat roster collapsed */}
@@ -773,6 +787,7 @@ function Roster({ allBodies, selectedId, onSelect, onEdit, onDelete, connected, 
         {allBodies.map((body) => {
           const isSun = body.isCore;
           const active = selectedId === body.id;
+          const requiresToolLoop = body.requiresToolLoop === true;
           return (
             <div
               key={body.id}
@@ -786,9 +801,31 @@ function Roster({ allBodies, selectedId, onSelect, onEdit, onDelete, connected, 
               >
                 <span className="roster-dot" style={{ background: body.color, boxShadow: `0 0 0.8vmin ${body.color}` }} />
                 <span className="roster-text">
-                  <span className="roster-name font-display">{body.name}</span>
+                  <span className="roster-name font-display">
+                    {body.name}
+                    {requiresToolLoop && (
+                      <span
+                        className="roster-toolloop-badge"
+                        title="Agent ini memakai Agent Core (tool loop mode)"
+                      >
+                        <Cpu size={9} />
+                      </span>
+                    )}
+                  </span>
                   <span className="roster-role font-mono">{body.role}</span>
                 </span>
+              </button>
+              <button
+                className="roster-edit-btn roster-run-btn"
+                onClick={() => onRunTask(body.id)}
+                title={
+                  agentCoreConnected === false
+                    ? `Agent Core mini-service tidak berjalan — jalankan dulu: cd mini-services/agent-core && bun run dev`
+                    : `Run task langsung via Agent Core: ${body.name}`
+                }
+                aria-label={`Run task: ${body.name}`}
+              >
+                <Play size={11} />
               </button>
               <button
                 className="roster-edit-btn"
@@ -1054,6 +1091,406 @@ interface PasskeyItem {
   lastUsedAt: string | null;
 }
 
+/* ------------------------------------------------------------------ */
+/*  AGENT CORE STATUS PANEL — polls /agent-core/health every 10s       */
+/* ------------------------------------------------------------------ */
+
+interface AgentCoreHealth {
+  ok: boolean;
+  port: number;
+  supabase: boolean;
+  time?: number;
+}
+
+function AgentCoreStatusPanel() {
+  const [health, setHealth] = useState<AgentCoreHealth | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [polling, setPolling] = useState(true);
+  const [lastChecked, setLastChecked] = useState<Date | null>(null);
+  const [supabaseUrl, setSupabaseUrl] = useState("");
+  const [supabaseAnonKey, setSupabaseAnonKey] = useState("");
+  const [supabaseServiceKey, setSupabaseServiceKey] = useState("");
+  const [n8nBaseUrl, setN8nBaseUrl] = useState("");
+  const [n8nApiKey, setN8nApiKey] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saveMsg, setSaveMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const checkHealth = useCallback(async () => {
+    try {
+      const res = await fetch("/agent-core/health", {
+        signal: AbortSignal.timeout(3000),
+      });
+      if (!res.ok) {
+        setHealth(null);
+        setError(`HTTP ${res.status}`);
+        return;
+      }
+      const data = await res.json();
+      setHealth({
+        ok: Boolean(data.ok),
+        port: Number(data.port) || 3030,
+        supabase: Boolean(data.supabase),
+        time: data.time,
+      });
+      setError(null);
+    } catch (err: any) {
+      setHealth(null);
+      setError(err?.message || "Agent Core tidak merespons");
+    } finally {
+      setLastChecked(new Date());
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!polling) return;
+    checkHealth();
+    const interval = setInterval(checkHealth, 10000);
+    return () => clearInterval(interval);
+  }, [polling, checkHealth]);
+
+  // Load existing settings from agent-core once connected.
+  useEffect(() => {
+    if (!health?.ok) return;
+    (async () => {
+      try {
+        const res = await fetch("/agent-core/settings/status");
+        if (res.ok) {
+          const data = await res.json();
+          if (data.supabase?.url) setSupabaseUrl(data.supabase.url);
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+  }, [health?.ok]);
+
+  async function handleSaveSettings() {
+    setSaving(true);
+    setSaveMsg(null);
+    try {
+      const body: Record<string, string> = {};
+      if (supabaseUrl.trim()) body.supabase_url = supabaseUrl.trim();
+      if (supabaseAnonKey.trim()) body.supabase_anon_key = supabaseAnonKey.trim();
+      if (supabaseServiceKey.trim()) body.supabase_service_role_key = supabaseServiceKey.trim();
+      if (n8nBaseUrl.trim()) body.n8n_base_url = n8nBaseUrl.trim();
+      if (n8nApiKey.trim()) body.n8n_api_key = n8nApiKey.trim();
+      if (Object.keys(body).length === 0) {
+        setSaveMsg({ ok: false, text: "Tidak ada perubahan untuk disimpan." });
+        return;
+      }
+      const res = await fetch("/agent-core/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        setSaveMsg({ ok: false, text: err.error || `HTTP ${res.status}` });
+        return;
+      }
+      const data = await res.json();
+      setSaveMsg({
+        ok: true,
+        text: data?.status?.supabase?.configured
+          ? "Tersimpan — Supabase terkonfigurasi."
+          : "Tersimpan.",
+      });
+      // Refresh health to reflect new supabase status
+      setTimeout(checkHealth, 300);
+    } catch (err: any) {
+      setSaveMsg({ ok: false, text: err?.message || "Gagal menyimpan" });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleTestConnection(service: "supabase" | "n8n" | "llm") {
+    setSaveMsg(null);
+    try {
+      // Save first so the backend sees the freshly typed creds.
+      await handleSaveSettings();
+      const res = await fetch("/agent-core/settings/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ service }),
+      });
+      const data = await res.json().catch(() => ({}));
+      setSaveMsg({
+        ok: Boolean(data.ok),
+        text: data.message || (data.ok ? "OK" : "Gagal"),
+      });
+    } catch (err: any) {
+      setSaveMsg({ ok: false, text: err?.message || "Gagal test koneksi" });
+    }
+  }
+
+  const connected = Boolean(health?.ok);
+
+  return (
+    <div style={{ marginTop: 18, paddingTop: 14, borderTop: "1px solid rgba(255,255,255,0.08)" }}>
+      <div
+        className="font-display"
+        style={{
+          fontSize: 13,
+          marginBottom: 4,
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          justifyContent: "space-between",
+        }}
+      >
+        <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <Server size={14} /> Agent Core (Mini-Service)
+        </span>
+        <span
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 5,
+            fontSize: 10.5,
+            fontFamily: "'JetBrains Mono', monospace",
+            color: connected ? "#5eead4" : "#ff8080",
+          }}
+        >
+          <span
+            style={{
+              width: 7,
+              height: 7,
+              borderRadius: "50%",
+              background: connected ? "#5eead4" : "#ff8080",
+              boxShadow: `0 0 6px ${connected ? "#5eead4" : "#ff8080"}`,
+              animation: connected ? "pulse-soft 2.4s ease-in-out infinite" : undefined,
+            }}
+          />
+          {connected ? `Connected · :${health?.port}` : "Disconnected"}
+        </span>
+      </div>
+
+      <p className="field-hint font-mono" style={{ marginBottom: 10 }}>
+        Mini-service Hermes-style agent loop (port 3030). Agent dengan{" "}
+        <code style={{ color: "#5eead4" }}>requiresToolLoop=true</code> di-route ke sini alih-alih
+        n8n webhook.
+      </p>
+
+      {!connected ? (
+        <div
+          style={{
+            padding: "12px 14px",
+            background: "rgba(255,128,128,0.07)",
+            border: "1px solid rgba(255,128,128,0.25)",
+            borderRadius: 10,
+            fontSize: 11,
+            color: "#ffb0b0",
+            fontFamily: "'JetBrains Mono', monospace",
+            lineHeight: 1.6,
+          }}
+        >
+          <AlertCircle size={12} style={{ verticalAlign: "middle", marginRight: 6 }} />
+          Agent Core mini-service tidak berjalan.
+          <pre
+            style={{
+              marginTop: 8,
+              marginBottom: 0,
+              padding: 0,
+              color: "#eae8f5",
+              fontSize: 10.5,
+              whiteSpace: "pre-wrap",
+            }}
+          >
+{`# Jalankan di terminal terpisah:
+cd mini-services/agent-core
+bun run dev
+
+# Atau sekali jalan (no hot reload):
+cd mini-services/agent-core
+bun index.ts`}
+          </pre>
+          {error && (
+            <div style={{ marginTop: 8, color: "#8683a1", fontSize: 10 }}>
+              Detail: {error}
+            </div>
+          )}
+          <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
+            <button
+              className="btn btn-ghost font-mono"
+              onClick={checkHealth}
+              style={{ fontSize: 10.5 }}
+            >
+              <RefreshCw size={11} /> Coba lagi
+            </button>
+            <label
+              className="font-mono"
+              style={{ fontSize: 10.5, display: "flex", alignItems: "center", gap: 4, color: "#8683a1" }}
+            >
+              <input
+                type="checkbox"
+                checked={polling}
+                onChange={(e) => setPolling(e.target.checked)}
+                style={{ width: 12, height: 12 }}
+              />
+              Auto-polling 10s
+            </label>
+          </div>
+        </div>
+      ) : (
+        <>
+          {/* Status badges */}
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+            <span
+              style={{
+                fontSize: 10,
+                fontFamily: "'JetBrains Mono', monospace",
+                padding: "3px 8px",
+                borderRadius: 999,
+                background: "rgba(94,234,212,0.1)",
+                border: "1px solid rgba(94,234,212,0.3)",
+                color: "#5eead4",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+              }}
+            >
+              <Activity size={10} /> port {health?.port}
+            </span>
+            <span
+              style={{
+                fontSize: 10,
+                fontFamily: "'JetBrains Mono', monospace",
+                padding: "3px 8px",
+                borderRadius: 999,
+                background: health?.supabase
+                  ? "rgba(94,234,212,0.1)"
+                  : "rgba(255,180,84,0.1)",
+                border: health?.supabase
+                  ? "1px solid rgba(94,234,212,0.3)"
+                  : "1px solid rgba(255,180,84,0.3)",
+                color: health?.supabase ? "#5eead4" : "#ffb454",
+              }}
+            >
+              Supabase {health?.supabase ? "configured" : "not set"}
+            </span>
+            {lastChecked && (
+              <span
+                style={{
+                  fontSize: 10,
+                  fontFamily: "'JetBrains Mono', monospace",
+                  padding: "3px 8px",
+                  borderRadius: 999,
+                  background: "rgba(255,255,255,0.04)",
+                  border: "1px solid rgba(255,255,255,0.1)",
+                  color: "#8683a1",
+                }}
+              >
+                Last: {lastChecked.toLocaleTimeString("id-ID")}
+              </span>
+            )}
+          </div>
+
+          {/* Credential inputs */}
+          <label className="field-label font-mono">Supabase URL</label>
+          <input
+            className="text-input font-mono"
+            placeholder="https://xxxx.supabase.co"
+            value={supabaseUrl}
+            onChange={(e) => setSupabaseUrl(e.target.value)}
+          />
+
+          <label className="field-label font-mono">Supabase Anon Key</label>
+          <input
+            className="text-input font-mono"
+            type="password"
+            placeholder="eyJhbGc... (anon key)"
+            value={supabaseAnonKey}
+            onChange={(e) => setSupabaseAnonKey(e.target.value)}
+          />
+
+          <label className="field-label font-mono">Supabase Service Role Key</label>
+          <input
+            className="text-input font-mono"
+            type="password"
+            placeholder="eyJhbGc... (service role key)"
+            value={supabaseServiceKey}
+            onChange={(e) => setSupabaseServiceKey(e.target.value)}
+          />
+
+          <label className="field-label font-mono">n8n Base URL (opsional)</label>
+          <input
+            className="text-input font-mono"
+            placeholder="https://n8n.domainanda.com"
+            value={n8nBaseUrl}
+            onChange={(e) => setN8nBaseUrl(e.target.value)}
+          />
+
+          <label className="field-label font-mono">n8n API Key (opsional)</label>
+          <input
+            className="text-input font-mono"
+            type="password"
+            placeholder="n8n_api_xxx..."
+            value={n8nApiKey}
+            onChange={(e) => setN8nApiKey(e.target.value)}
+          />
+
+          <div className="modal-actions" style={{ marginTop: 12, flexWrap: "wrap" }}>
+            <button
+              className="btn font-mono"
+              onClick={handleSaveSettings}
+              disabled={saving}
+            >
+              {saving ? <Loader2 size={12} className="spin-icon" /> : <Power size={12} />}
+              Simpan
+            </button>
+            <button
+              className="btn btn-ghost font-mono"
+              onClick={() => handleTestConnection("supabase")}
+            >
+              Test Supabase
+            </button>
+            <button
+              className="btn btn-ghost font-mono"
+              onClick={() => handleTestConnection("n8n")}
+            >
+              Test n8n
+            </button>
+            <button
+              className="btn btn-ghost font-mono"
+              onClick={checkHealth}
+              title="Refresh status"
+            >
+              <RefreshCw size={11} />
+            </button>
+          </div>
+
+          {saveMsg && (
+            <p
+              className="font-mono"
+              style={{
+                marginTop: 8,
+                fontSize: 11,
+                color: saveMsg.ok ? "#5eead4" : "#ff8080",
+              }}
+            >
+              {saveMsg.ok ? "✓ " : "✗ "}
+              {saveMsg.text}
+            </p>
+          )}
+
+          <p className="field-hint font-mono" style={{ marginTop: 8 }}>
+            Settings disimpan di <code style={{ color: "#5eead4" }}>mini-services/agent-core/data/config.db</code>{" "}
+            (SQLite, AES-256-GCM encrypted secrets). Tidak dikirim ke Next.js Prisma DB.
+          </p>
+        </>
+      )}
+
+      <style>{`
+        @keyframes pulse-soft {
+          0%, 100% { opacity: 1; transform: scale(1); }
+          50% { opacity: 0.6; transform: scale(0.85); }
+        }
+      `}</style>
+    </div>
+  );
+}
+
 function SettingsModal({ settings, onChange, onClose, onTest, testState, onReset }: SettingsModalProps) {
   // --- Manajemen Passkey (WebAuthn) ---
   const [passkeys, setPasskeys] = useState<PasskeyItem[]>([]);
@@ -1272,6 +1709,9 @@ function SettingsModal({ settings, onChange, onClose, onTest, testState, onReset
           <SyncRegistryButton onToast={onChange} />
         </div>
 
+        {/* AGENT CORE (Mini-Service) */}
+        <AgentCoreStatusPanel />
+
         {/* KEAMANAN — Manajemen Passkey (WebAuthn) */}
         <div style={{ marginTop: 18, paddingTop: 14, borderTop: "1px solid rgba(255,255,255,0.08)" }}>
           <div className="font-display" style={{ fontSize: 13, marginBottom: 4, display: "flex", alignItems: "center", gap: 6 }}>
@@ -1390,7 +1830,7 @@ function AddAgentModal({ onClose, onAdd }: AddAgentModalProps) {
         {created ? (
           <>
             <div className="drawer-header">
-              <div className="font-display" style={{ fontSize: 16 }}>Agent "{created.agent.name}" Dibuat!</div>
+              <div className="font-display" style={{ fontSize: 16 }}>Agent &ldquo;{created.agent.name}&rdquo; Dibuat!</div>
               <button className="icon-btn" onClick={onClose} aria-label="Tutup"><X size={18} /></button>
             </div>
             <div style={{ textAlign: "center", padding: "16px 0" }}>
@@ -2059,6 +2499,8 @@ export default function ArtechOrchestrator() {
   const [toast, setToast] = useState<{ msg: string; type: string; key: string } | null>(null);
   const [addAgentOpen, setAddAgentOpen] = useState(false);
   const [renameAgentId, setRenameAgentId] = useState<string | null>(null);
+  const [runTaskAgentId, setRunTaskAgentId] = useState<string | null>(null);
+  const [agentCoreConnected, setAgentCoreConnected] = useState<boolean | null>(null);
   const [sessionInfo, setSessionInfo] = useState<SessionInfo | null>(null);
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
 
@@ -2148,6 +2590,35 @@ export default function ArtechOrchestrator() {
   }, []);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  /* ---- poll Agent Core mini-service health (every 15s) ----
+     Used for the "Run Task" button tooltip + Roster run-btn styling.
+     The detailed status panel inside SettingsModal polls independently. */
+  useEffect(() => {
+    let cancelled = false;
+    async function check() {
+      try {
+        const res = await fetch("/agent-core/health", {
+          signal: AbortSignal.timeout(3000),
+        });
+        if (cancelled) return;
+        if (!res.ok) {
+          setAgentCoreConnected(false);
+          return;
+        }
+        const data = await res.json();
+        setAgentCoreConnected(Boolean(data.ok));
+      } catch {
+        if (!cancelled) setAgentCoreConnected(false);
+      }
+    }
+    check();
+    const interval = setInterval(check, 15000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
 
   /* ---- load voices dari browser (Chrome online voices) ---- */
   useEffect(() => {
@@ -2782,12 +3253,14 @@ export default function ArtechOrchestrator() {
         .roster-edit-btn{ background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.08); color:var(--dust); width:26px; height:26px; border-radius:6px; display:flex; align-items:center; justify-content:center; cursor:pointer; opacity:0; transition: all .2s ease; flex-shrink:0; padding:0; }
         .roster-item:hover .roster-edit-btn{ opacity:1; }
         .roster-edit-btn:hover{ background:rgba(94,234,212,0.15); border-color:var(--ion); color:var(--ion); }
+        .roster-run-btn:hover{ background:rgba(255,204,102,0.15) !important; border-color:#ffcc66 !important; color:#ffcc66 !important; }
         .roster-delete-btn:hover{ background:rgba(255,128,128,0.15) !important; border-color:#ff8080 !important; color:#ff8080 !important; }
         .roster-dot{ width:8px; height:8px; border-radius:50%; flex-shrink:0; }
         .roster-dot-btn{ width:14px; height:14px; border-radius:50%; border:none; cursor:pointer; padding:0; margin:4px 0; }
         .roster-dot-btn[data-active="true"]{ width:20px; height:20px; }
         .roster-text{ display:flex; flex-direction:column; flex:1; min-width:0; }
-        .roster-name{ font-size:13px; }
+        .roster-name{ font-size:13px; display:inline-flex; align-items:center; gap:4px; }
+        .roster-toolloop-badge{ display:inline-flex; align-items:center; justify-content:center; width:13px; height:13px; border-radius:3px; background:rgba(255,180,84,0.15); border:1px solid rgba(255,180,84,0.4); color:#ffb454; flex-shrink:0; }
         .roster-role{ font-size:10px; color:var(--dust); }
         .roster-level{ font-size:10px; color:var(--dust); }
         .roster-status{ display:flex; }
@@ -3399,6 +3872,8 @@ export default function ArtechOrchestrator() {
           collapsed={rosterCollapsed}
           onToggleCollapse={() => setRosterCollapsed((v) => !v)}
           onAddAgent={() => setAddAgentOpen(true)}
+          onRunTask={(id) => setRunTaskAgentId(id)}
+          agentCoreConnected={agentCoreConnected === true}
         />
 
         <div className="orbit-stage">
@@ -3447,6 +3922,26 @@ export default function ArtechOrchestrator() {
 
       {addAgentOpen && <AddAgentModal onClose={() => setAddAgentOpen(false)} onAdd={handleAddAgent} />}
       {renameAgentId && <RenameAgentModal body={getBody(renameAgentId)} onClose={() => setRenameAgentId(null)} onRename={handleRenameAgent} voices={voices} />}
+
+      {/* Run Task dialog (via Agent Core mini-service) */}
+      {runTaskAgentId && (() => {
+        const body = getBody(runTaskAgentId);
+        if (!body) return null;
+        return (
+          <RunTaskDialog
+            agentId={body.id}
+            agentName={body.name}
+            agentColor={body.color}
+            agentRole={body.role}
+            onClose={() => setRunTaskAgentId(null)}
+            onResult={(text) => {
+              // Surface a brief toast so the user gets feedback even if
+              // they close the dialog immediately.
+              showToast(`✓ ${body.name}: ${(text || "").slice(0, 80)}${text.length > 80 ? "..." : ""}`, "info");
+            }}
+          />
+        );
+      })()}
 
       {toast && (
         <div className="toast glass-panel font-mono" style={{ color: toast.type === "error" ? "#ff8080" : toast.type === "level" ? "#ffb454" : "#eae8f5" }} key={toast.key}>

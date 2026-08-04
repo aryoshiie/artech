@@ -97,7 +97,7 @@ export async function logAccess(
         event,
         ipAddress,
         userAgent,
-        metadata: metadata || undefined,
+        metadata: metadata ? JSON.stringify(metadata) : null,
       },
     });
 

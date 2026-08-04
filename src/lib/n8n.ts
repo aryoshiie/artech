@@ -44,6 +44,8 @@ async function getZai() {
 /**
  * Dapatkan webhook URL untuk agent.
  * Prioritas:
+ *   0. agent.requiresToolLoop === true → internal://agent-core/{agentId}
+ *      (route ke mini-service agent-core untuk Hermes-style tool loop)
  *   1. agent.webhookUrl (kalau di-set & URL http real → n8n mode)
  *   2. settings.n8nBaseUrl → generate pattern {baseUrl}/webhook/agent-{agentId} (→ n8n mode)
  *   3. settings.webhookUrl (untuk orchestrator/core) (→ n8n mode)
@@ -51,6 +53,12 @@ async function getZai() {
  */
 export async function getAgentWebhookUrl(agentId: string): Promise<string | null> {
   const agent = await db.agent.findUnique({ where: { id: agentId } });
+
+  // Mode 0: agent requires tool loop → route ke agent-core mini-service
+  if (agent?.requiresToolLoop) {
+    return `internal://agent-core/${agentId}`;
+  }
+
   if (agent?.webhookUrl && /^https?:\/\//.test(agent.webhookUrl)) {
     return agent.webhookUrl;
   }
@@ -92,10 +100,37 @@ function isLlmInternal(url: string): boolean {
 }
 
 /**
+ * Cek apakah URL adalah internal agent-core (tool-loop mode).
+ */
+function isAgentCoreInternal(url: string): boolean {
+  return url.startsWith("internal://agent-core/");
+}
+
+/**
+ * Ekstrak agentId dari internal://agent-core/{agentId}.
+ */
+function parseAgentCoreId(url: string): string | null {
+  const m = url.match(/^internal:\/\/agent-core\/([\w-]+)$/);
+  return m ? m[1] : null;
+}
+
+/**
  * Test koneksi ke n8n webhook (dipakai di Settings).
  */
 export async function testN8nConnection(webhookUrl: string): Promise<boolean> {
   if (!webhookUrl || isLlmInternal(webhookUrl)) return true; // LLM mode always "ok"
+  if (isAgentCoreInternal(webhookUrl)) {
+    // agent-core mode — ping the mini-service /health via the rewrite
+    try {
+      const res = await fetch(
+        `${process.env.AGENT_CORE_URL || "http://localhost:3030"}/health`,
+        { signal: AbortSignal.timeout(3000) }
+      );
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }
   try {
     const res = await fetch(webhookUrl, {
       method: "POST",
@@ -133,12 +168,17 @@ Aturan menjawab:
 }
 
 /**
- * Kirim payload ke n8n webhook (sync) ATAU fallback ke LLM.
+ * Kirim payload ke n8n webhook (sync) ATAU fallback ke LLM ATAU route ke agent-core.
  */
 export async function sendToN8n(
   webhookUrl: string,
   payload: N8nPayload
 ): Promise<N8nResponse> {
+  // ===== AGENT-CORE TOOL-LOOP MODE =====
+  if (isAgentCoreInternal(webhookUrl)) {
+    return callAgentCore(webhookUrl, payload);
+  }
+
   // ===== LLM FALLBACK MODE =====
   if (isLlmInternal(webhookUrl)) {
     return callLlm(payload);
@@ -242,5 +282,64 @@ async function callLlm(payload: N8nPayload): Promise<N8nResponse> {
   } catch (err: any) {
     console.error("[llm] error:", err);
     return { error: `Gagal memanggil LLM: ${err?.message || String(err)}` };
+  }
+}
+
+/**
+ * Agent-core tool-loop mode — route ke mini-service agent-core (port 3030)
+ * kalau agent.requiresToolLoop === true. Agent-core akan menjalankan loop
+ * LLM → tool call → execute → loop dengan konfigurasi dari Prisma (systemPrompt,
+ * toolWhitelist, maxIterations, temperature).
+ */
+async function callAgentCore(
+  webhookUrl: string,
+  payload: N8nPayload
+): Promise<N8nResponse> {
+  const agentId = parseAgentCoreId(webhookUrl);
+  if (!agentId) {
+    return { error: "URL agent-core tidak valid: " + webhookUrl };
+  }
+
+  try {
+    const agent = await db.agent.findUnique({ where: { id: agentId } });
+    if (!agent) {
+      return { error: `Agent ${agentId} tidak ditemukan` };
+    }
+
+    const { runAgent, buildDefaultSystemPrompt } = await import("./agent-core");
+
+    const toolWhitelist = (agent.toolWhitelist || "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    const result = await runAgent({
+      agentId: agent.id,
+      task: payload.message,
+      sessionId: payload.sessionId,
+      systemPrompt:
+        agent.systemPrompt?.trim() ||
+        buildDefaultSystemPrompt(
+          { name: agent.name, role: agent.role, desc: agent.desc },
+          payload.mode,
+        ),
+      toolWhitelist: toolWhitelist.length > 0 ? toolWhitelist : undefined,
+      maxIterations: agent.maxIterations || 25,
+      temperature: agent.temperature ?? 0.7,
+    });
+
+    if (result.ok) {
+      return { reply: result.result || "(Agent tidak mengembalikan teks)", endSession: false };
+    }
+    return {
+      error:
+        result.error ||
+        "Agent Core mini-service tidak berjalan. Jalankan: cd mini-services/agent-core && bun run dev",
+    };
+  } catch (err: any) {
+    console.error("[agent-core] error:", err);
+    return {
+      error: `Gagal memanggil Agent Core: ${err?.message || String(err)}. Pastikan mini-service berjalan (cd mini-services/agent-core && bun run dev).`,
+    };
   }
 }

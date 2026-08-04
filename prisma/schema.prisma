@@ -1,56 +1,16 @@
-// Artech Orchestrator — Prisma schema (PRODUCTION: PostgreSQL Supabase)
-// Original: SQLite (sandbox demo) — restored to PostgreSQL for Vercel deploy
+// Artech — Prisma schema (SANDOX: SQLite for local testing)
+// For PRODUCTION: switch provider to "postgresql" + set DATABASE_URL/DIRECT_URL to Supabase
 
 generator client {
-  provider        = "prisma-client-js"
-  previewFeatures = ["multiSchema"]
+  provider = "prisma-client-js"
 }
 
 datasource db {
-  provider  = "postgresql"
-  url       = env("DATABASE_URL")
-  directUrl = env("DIRECT_URL")
-  schemas   = ["artech"]
+  provider = "sqlite"
+  url      = "file:./dev.db"
 }
 
-// =============== ENUMS ===============
-
-enum MessageRole {
-  user
-  agent
-  system
-
-  @@schema("artech")
-}
-
-enum SessionMode {
-  default
-  bypass
-
-  @@schema("artech")
-}
-
-enum SessionStatus {
-  active
-  ended_agent
-  ended_user
-  ended_idle
-  ended_error
-
-  @@schema("artech")
-}
-
-enum ExecutionStatus {
-  pending
-  running
-  success
-  error
-  timeout
-
-  @@schema("artech")
-}
-
-// =============== MODELS ===============
+// =============== ENUMS (SQLite doesn't support native enums — use String) ===============
 
 model Agent {
   id              String    @id
@@ -78,6 +38,17 @@ model Agent {
   webhookUrl       String?
   workflowId       String?
 
+  // === ADDED: agent-core integration fields ===
+  systemPrompt     String?
+  toolWhitelist    String?
+  skillWhitelist   String?
+  memoryScope      String    @default("agent")
+  slotMode         String    @default("ondemand")
+  maxIterations    Int       @default(25)
+  temperature      Float     @default(0.7)
+  enabled          Boolean   @default(true)
+  requiresToolLoop Boolean   @default(false)
+
   xp               Int      @default(0)
   level            Int      @default(1)
 
@@ -91,7 +62,6 @@ model Agent {
 
   @@index([isCore])
   @@index([orchestratorOrder])
-  @@schema("artech")
 }
 
 model Tool {
@@ -109,7 +79,6 @@ model Tool {
   createdAt DateTime @default(now())
 
   @@index([agentId])
-  @@schema("artech")
 }
 
 model Message {
@@ -118,20 +87,19 @@ model Message {
   agent     Agent       @relation(fields: [agentId], references: [id], onDelete: Cascade)
   sessionId String?
   session   Session?    @relation(fields: [sessionId], references: [id], onDelete: SetNull)
-  role      MessageRole
+  role      String
   text      String?
-  files     Json?
+  files     String?
   createdAt DateTime    @default(now())
 
   @@index([agentId, createdAt])
   @@index([sessionId])
-  @@schema("artech")
 }
 
 model Session {
   id              String        @id @default(cuid())
-  mode            SessionMode   @default(default)
-  status          SessionStatus @default(active)
+  mode            String        @default("default")
+  status          String        @default("active")
   activeAgentId   String?
   activeAgent     Agent?        @relation("SessionActiveAgent", fields: [activeAgentId], references: [id], onDelete: SetNull)
 
@@ -147,30 +115,28 @@ model Session {
 
   @@index([status])
   @@index([activeAgentId])
-  @@schema("artech")
 }
 
 model AgentExecution {
-  id          String           @id @default(cuid())
+  id          String   @id @default(cuid())
   agentId     String
-  agent       Agent            @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  agent       Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
   sessionId   String?
-  session     Session?         @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  session     Session? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
   workflowId  String?
 
-  status      ExecutionStatus  @default(pending)
-  input       Json?
-  output      Json?
+  status      String   @default("pending")
+  input       String?
+  output      String?
   error       String?
 
-  startedAt   DateTime         @default(now())
+  startedAt   DateTime @default(now())
   finishedAt  DateTime?
   durationMs  Int?
 
   @@index([agentId, startedAt])
   @@index([sessionId])
   @@index([status])
-  @@schema("artech")
 }
 
 model Settings {
@@ -185,8 +151,6 @@ model Settings {
   sessionIdleTimeoutMin Int      @default(30)
   ownerNotifyWebhook    String?
   updatedAt             DateTime @updatedAt
-
-  @@schema("artech")
 }
 
 model User {
@@ -198,8 +162,6 @@ model User {
   passkeys     Passkey[]
   sessions     AuthSession[]
   accessLogs   AccessLog[]
-
-  @@schema("artech")
 }
 
 model Passkey {
@@ -215,7 +177,6 @@ model Passkey {
   lastUsedAt      DateTime?
 
   @@index([userId])
-  @@schema("artech")
 }
 
 model AuthSession {
@@ -230,7 +191,6 @@ model AuthSession {
 
   @@index([userId])
   @@index([expiresAt])
-  @@schema("artech")
 }
 
 model AccessLog {
@@ -240,10 +200,9 @@ model AccessLog {
   event       String
   ipAddress   String?
   userAgent   String?
-  metadata    Json?
+  metadata    String?
   createdAt   DateTime @default(now())
 
   @@index([userId, createdAt])
   @@index([event, createdAt])
-  @@schema("artech")
 }
