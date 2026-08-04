@@ -1,5 +1,5 @@
 // src/app/api/agents/route.ts
-// List & create agents.
+// List & create agents. ID auto-generate: AGT-001, AGT-002, dst.
 
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
@@ -7,23 +7,13 @@ import { generateWebhookUrl } from "@/lib/n8n";
 
 export const runtime = "nodejs";
 
-function slugify(s: string): string {
-  return (s || "")
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 40);
-}
-
-function randomSuffix(len = 4): string {
-  const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
-  let out = "";
-  for (let i = 0; i < len; i++) {
-    out += chars[Math.floor(Math.random() * chars.length)];
-  }
-  return out;
+async function generateAgentId(): Promise<string> {
+  const agents = await db.agent.findMany({ select: { id: true } });
+  const numbers = agents
+    .map((a) => parseInt((a.id || "").replace("AGT-", ""), 10))
+    .filter((n) => !isNaN(n));
+  const nextNum = numbers.length > 0 ? Math.max(...numbers) + 1 : 1;
+  return `AGT-${String(nextNum).padStart(3, "0")}`;
 }
 
 export async function GET(_req: NextRequest) {
@@ -63,23 +53,10 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Generate ID dari slug + random suffix (kalau bukan core)
-    const baseSlug = slugify(name) || "agent";
-    let agentId = `${baseSlug}-${randomSuffix()}`;
-    // Pastikan unik
-    let exists = await db.agent.findUnique({ where: { id: agentId } });
-    while (exists) {
-      agentId = `${baseSlug}-${randomSuffix()}`;
-      exists = await db.agent.findUnique({ where: { id: agentId } });
-    }
-
-    // Auto-generate webhook URL
+    const agentId = await generateAgentId();
     const webhookUrl = await generateWebhookUrl(agentId);
-
-    // Auto-generate routingKeywords dari name (lowercase)
     const routingKeywords = name.toLowerCase().trim();
 
-    // Auto-assign orchestratorOrder = max + 1
     const maxOrder = await db.agent.aggregate({
       _max: { orchestratorOrder: true },
     });
