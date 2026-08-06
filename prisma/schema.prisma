@@ -41,6 +41,7 @@ model Agent {
 
   // === ADDED: agent-core integration fields ===
   systemPrompt     String?
+  userPrompt       String?
   toolWhitelist    String?
   skillWhitelist   String?
   memoryScope      String    @default("agent")

@@ -1,8 +1,7 @@
 // src/app/api/agents/[id]/route.ts
-// Get, update, delete single agent.
-
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { syncToPromptLibrary, deleteFromPromptLibrary } from "@/lib/sync-prompt";
 
 export const runtime = "nodejs";
 
@@ -20,13 +19,10 @@ export async function GET(
       return NextResponse.json({ error: "Agent tidak ditemukan" }, { status: 404 });
     }
     const messageCount = await db.message.count({ where: { agentId: id } });
-    return NextResponse.json({ agent, messageCount });
+    return NextResponse.json({ ...agent, messageCount });
   } catch (err: any) {
     console.error("[API GET /agents/[id]]", err);
-    return NextResponse.json(
-      { error: err?.message || "Gagal memuat agent" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Gagal memuat agent" }, { status: 500 });
   }
 }
 
@@ -36,55 +32,50 @@ export async function PATCH(
 ) {
   try {
     const { id } = await params;
-    const body = await req.json().catch(() => ({}));
+    const body = await req.json();
 
-    const allowed: Record<string, boolean> = {
-      name: true,
-      role: true,
-      desc: true,
-      color: true,
-      glow: true,
-      size: true,
-      orbit: true,
-      duration: true,
-      ring: true,
-      routingKeywords: true,
-      orchestratorOrder: true,
-      voicePitch: true,
-      voiceRate: true,
-      voiceGender: true,
-      voiceName: true,
-      webhookUrl: true,
-      systemPrompt: true,
-      userPrompt: true,
-      isActive: true,
-      workflowId: true,
-    };
+    const allowed = [
+      "name", "role", "desc", "color", "glow", "size", "orbit", "duration", "ring",
+      "routingKeywords", "orchestratorOrder",
+      "voicePitch", "voiceRate", "voiceGender", "voiceName",
+      "webhookUrl", "systemPrompt", "userPrompt", "isActive", "workflowId",
+    ];
 
     const data: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(body)) {
-      if (allowed[k]) data[k] = v;
+    for (const key of allowed) {
+      if (key in body) {
+        data[key] = body[key];
+      }
     }
 
-    if (Object.keys(data).length === 0) {
-      return NextResponse.json({ error: "Tidak ada field untuk diupdate" }, { status: 400 });
+       if ("isActive" in data) {
+      data.enabled = data.isActive;
+      delete data.isActive;
     }
 
-    const agent = await db.agent.update({
+    const updated = await db.agent.update({
       where: { id },
       data,
       include: { tools: true },
     });
-    return NextResponse.json({ agent });
+
+    // 🔥 AUTO-SYNC ke prompt_library
+    await syncToPromptLibrary({
+      id: updated.id,
+      name: updated.name,
+      role: updated.role,
+      systemPrompt: updated.systemPrompt,
+      userPrompt: updated.userPrompt,
+      enabled: updated.enabled,
+    });
+
+    return NextResponse.json(updated);
   } catch (err: any) {
     console.error("[API PATCH /agents/[id]]", err);
     if (err?.code === "P2025") {
       return NextResponse.json({ error: "Agent tidak ditemukan" }, { status: 404 });
     }
-    return NextResponse.json(
-      { error: err?.message || "Gagal update agent" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Gagal update agent" }, { status: 500 });
   }
 }
 
@@ -94,27 +85,27 @@ export async function DELETE(
 ) {
   try {
     const { id } = await params;
+
     const agent = await db.agent.findUnique({ where: { id } });
     if (!agent) {
       return NextResponse.json({ error: "Agent tidak ditemukan" }, { status: 404 });
     }
     if (agent.isCore) {
       return NextResponse.json(
-        { error: "Agent core (orchestrator) tidak boleh dihapus" },
+        { error: "Agent core (Inti Galaksi) tidak boleh dihapus" },
         { status: 400 }
       );
     }
-    // Cascade: tools, messages, executions (Tool & Message & AgentExecution punya onDelete: Cascade)
+
+    await deleteFromPromptLibrary(id);
+
     await db.agent.delete({ where: { id } });
-    return NextResponse.json({ ok: true, id });
+    return NextResponse.json({ ok: true });
   } catch (err: any) {
     console.error("[API DELETE /agents/[id]]", err);
     if (err?.code === "P2025") {
       return NextResponse.json({ error: "Agent tidak ditemukan" }, { status: 404 });
     }
-    return NextResponse.json(
-      { error: err?.message || "Gagal menghapus agent" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Gagal hapus agent" }, { status: 500 });
   }
 }

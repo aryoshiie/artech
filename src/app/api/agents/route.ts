@@ -1,92 +1,92 @@
 // src/app/api/agents/route.ts
-// List & create agents. ID auto-generate: AGT-001, AGT-002, dst.
-
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { generateWebhookUrl } from "@/lib/n8n";
+import { syncToPromptLibrary } from "@/lib/sync-prompt";
 
 export const runtime = "nodejs";
 
-async function generateAgentId(): Promise<string> {
-  const agents = await db.agent.findMany({ select: { id: true } });
-  const numbers = agents
-    .map((a) => parseInt((a.id || "").replace("AGT-", ""), 10))
-    .filter((n) => !isNaN(n));
-  const nextNum = numbers.length > 0 ? Math.max(...numbers) + 1 : 1;
-  return `AGT-${String(nextNum).padStart(3, "0")}`;
-}
-
-export async function GET(_req: NextRequest) {
+export async function GET() {
   try {
     const agents = await db.agent.findMany({
       include: { tools: true },
       orderBy: [{ isCore: "desc" }, { orchestratorOrder: "asc" }, { createdAt: "asc" }],
     });
-    return NextResponse.json({ agents });
+    return NextResponse.json(agents);
   } catch (err: any) {
     console.error("[API GET /agents]", err);
-    return NextResponse.json(
-      { error: err?.message || "Gagal memuat daftar agent" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Gagal memuat agent" }, { status: 500 });
   }
 }
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json().catch(() => ({}));
-    const { name, role, desc, color, voicePitch, voiceRate, voiceGender, voiceName } = body as {
-      name?: string;
-      role?: string;
-      desc?: string;
-      color?: string;
-      voicePitch?: number;
-      voiceRate?: number;
-      voiceGender?: string;
-      voiceName?: string;
-    };
+    const body = await req.json();
 
-    if (!name || !role || !color) {
+    if (!body.name || !body.role || !body.color) {
       return NextResponse.json(
         { error: "Field wajib: name, role, color" },
         { status: 400 }
       );
     }
 
-    const agentId = await generateAgentId();
-    const webhookUrl = await generateWebhookUrl(agentId);
-    const routingKeywords = name.toLowerCase().trim();
-
-    const maxOrder = await db.agent.aggregate({
-      _max: { orchestratorOrder: true },
+    const existingAgents = await db.agent.findMany({
+      where: { id: { startsWith: "AGT-" } },
+      select: { id: true },
     });
-    const nextOrder = (maxOrder._max.orchestratorOrder ?? -1) + 1;
+    const maxNum = existingAgents.reduce((max, a) => {
+      const m = a.id.match(/^AGT-(\d+)$/);
+      return m ? Math.max(max, parseInt(m[1], 10)) : max;
+    }, 0);
+    const newId = `AGT-${String(maxNum + 1).padStart(3, "0")}`;
 
-    const agent = await db.agent.create({
+    const settings = await db.settings.findUnique({ where: { id: "singleton" } });
+    const base = (settings?.n8nBaseUrl || "https://your-n8n.example.com").replace(/\/$/, "");
+    const webhookUrl = `${base}/webhook/agent-${newId}`;
+
+    const maxOrder = await db.agent.count({ where: { isCore: false } });
+
+    const created = await db.agent.create({
       data: {
-        id: agentId,
-        name,
-        role,
-        desc: desc ?? "",
-        color,
-        voicePitch: typeof voicePitch === "number" ? voicePitch : 1,
-        voiceRate: typeof voiceRate === "number" ? voiceRate : 1,
-        voiceGender: voiceGender || "neutral",
-        voiceName: voiceName || null,
-        webhookUrl,
-        routingKeywords,
-        orchestratorOrder: nextOrder,
+        id: newId,
+        name: body.name,
+        role: body.role,
+        desc: body.desc || "",
+        color: body.color,
+        glow: body.glow || "",
+        size: body.size || 4,
+        orbit: body.orbit || 30,
+        duration: body.duration || 20,
+        ring: body.ring || false,
         isCore: false,
         custom: true,
+        routingKeywords: body.routingKeywords || body.name.toLowerCase(),
+        orchestratorOrder: maxOrder + 1,
+        voicePitch: body.voicePitch || 1,
+        voiceRate: body.voiceRate || 1,
+        voiceGender: body.voiceGender || "neutral",
+        voiceName: body.voiceName || null,
+        webhookUrl,
+        systemPrompt: body.systemPrompt || null,
+        userPrompt: body.userPrompt || null,
       },
       include: { tools: true },
     });
 
-    return NextResponse.json({ agent, webhookUrl }, { status: 201 });
+    // 🔥 AUTO-SYNC ke prompt_library
+    await syncToPromptLibrary({
+      id: created.id,
+      name: created.name,
+      role: created.role,
+      systemPrompt: created.systemPrompt,
+      userPrompt: created.userPrompt,
+      enabled: created.enabled,
+    });
+
+    return NextResponse.json(created, { status: 201 });
   } catch (err: any) {
     console.error("[API POST /agents]", err);
     return NextResponse.json(
-      { error: err?.message || "Gagal membuat agent" },
+      { error: "Gagal membuat agent", details: err?.message },
       { status: 500 }
     );
   }
