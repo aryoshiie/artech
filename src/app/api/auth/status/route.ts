@@ -4,6 +4,7 @@
 
 import { NextResponse } from "next/server";
 import { getCurrentUser, isSetupComplete } from "@/lib/auth";
+import { db } from "@/lib/db";
 
 export const runtime = "nodejs";
 
@@ -18,9 +19,19 @@ export async function GET() {
       getCurrentUser(),
     ]);
   } catch (err: any) {
-    console.error("[API GET /auth/status] DB error (fallback to setupComplete=true):", err?.message);
-    // JANGAN return 500 — itu bikin client side error.
-    // Return setupComplete=true supaya client redirect ke /login (bukan /setup)
+    console.error("[API GET /auth/status] Unexpected error (fallback to setupComplete=true):", err?.message);
+    setupComplete = true;
+  }
+
+  // Final safety net: JANGAN pernah return setupComplete=false jika ada kemungkinan DB error.
+  if (!setupComplete && !user) {
+    try {
+      const retryCount = await db.user.count();
+      setupComplete = retryCount > 0;
+    } catch {
+      console.error("[API GET /auth/status] Retry failed, forcing setupComplete=true");
+      setupComplete = true;
+    }
   }
 
   return NextResponse.json({

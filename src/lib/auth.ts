@@ -156,7 +156,8 @@ export async function isSetupComplete(): Promise<boolean> {
   try {
     const count = await db.user.count();
     return count > 0;
-  } catch {
-    return false;
+  } catch (err) {
+    console.error("[isSetupComplete] DB error, assuming setupComplete=true:", err);
+    return true;
   }
 }

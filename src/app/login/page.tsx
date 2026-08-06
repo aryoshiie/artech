@@ -18,23 +18,25 @@ export default function LoginPage() {
   const [passkeyLoading, setPasskeyLoading] = useState(false);
   const [error, setError] = useState("");
   const [checking, setChecking] = useState(true);
-  const [setupComplete, setSetupComplete] = useState(false);
+  const [setupComplete, setSetupComplete] = useState(true);
   const [loggedIn, setLoggedIn] = useState(false);
 
-  useEffect(() => {
+   useEffect(() => {
     fetch("/api/auth/status")
       .then((r) => r.json())
       .then(data => {
-  setSetupComplete(data.setupComplete);
-  if (data.loggedIn) {
-    // Sudah login → redirect ke dashboard
-    router.push("/");
-  } else if (!data.setupComplete) {
-    // Setup belum done → redirect ke /setup
-    router.push("/setup");
-  }
-  // else: stay di /login (setupComplete=true, loggedIn=false)
-})
+        setSetupComplete(data.setupComplete);
+        setLoggedIn(data.loggedIn);
+        setChecking(false);
+        if (data.loggedIn) {
+          // Sudah login → redirect ke dashboard
+          router.push("/");
+        } else if (!data.setupComplete) {
+          // Setup belum done → redirect ke /setup
+          router.push("/setup");
+        }
+        // else: stay di /login (setupComplete=true, loggedIn=false)
+      })
       .catch(() => setChecking(false));
   }, [router]);
 
